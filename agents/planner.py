@@ -1,0 +1,68 @@
+import os
+import re
+from agents.llm_planner import LLMPlanner
+
+class Planner:
+    def __init__(self, use_llm: bool = True):
+        self.rules = {
+            "drug": ["成分", "说明书", "副作用", "禁忌", "用法", "剂量"],
+            "guideline": ["指南", "治疗", "推荐", "临床", "诊疗"],
+            "literature": ["论文", "研究", "文献", "机制", "试验"],
+            "risk": ["相互作用", "不良反应", "禁忌", "风险", "安全", "冲突", "合用", "联合用药", "危险"],
+            "patient": ["患者", "记住", "记录", "档案", "病历", "姓名", "信息", "追加", "补充", "病号", "增加"]
+        }
+        self.use_llm = use_llm
+        if self.use_llm:
+            api_key = os.getenv("DASHSCOPE_API_KEY")
+            if not api_key:
+                raise ValueError("DASHSCOPE_API_KEY not set")
+            self.llm_planner = LLMPlanner(api_key)
+
+    def rule_based(self, question: str) -> list:
+        tools = set()
+        stripped = question.strip()
+
+        # 1. 纯姓名检测（2-4个中文字符）
+        if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', stripped):
+            tools.add("patient")
+
+        # 2. 使用正则检测 patient 相关关键词（比 in 更健壮）
+        if re.search(r'患者|记住|记录|档案|病历|信息|追加|补充|病号|增加', question):
+            tools.add("patient")
+
+        # 3. 匹配其他工具的关键词（跳过 patient）
+        for tool, keywords in self.rules.items():
+            if tool == "patient":
+                continue
+            for kw in keywords:
+                if kw in question:
+                    tools.add(tool)
+
+        # 4. 默认工具
+        if not tools:
+            return ["drug", "guideline", "literature", "risk"]
+
+        # 5. 如果只有 patient（纯姓名触发），追加默认工具
+        if tools == {"patient"}:
+            tools.update(["drug", "guideline", "literature", "risk"])
+
+        return list(tools)
+
+    def run(self, question: str) -> dict:
+        # 先运行规则
+        tools = self.rule_based(question)
+        has_patient = "patient" in tools
+
+        # LLM 重新规划
+        if self.use_llm and (len(tools) == 0 or len(tools) > 3):
+            print(f"[Planner] rule result {tools} -> using LLM")
+            tools = self.llm_planner.select_tools(question)
+            if not tools:
+                tools = ["drug"]
+                print("[Planner] LLM returned empty, fallback to drug")
+            # 如果原规则中有 patient，但 LLM 去掉了，强制加回
+            if has_patient and "patient" not in tools:
+                tools.append("patient")
+                print("[Planner] LLM removed patient, re-adding it")
+
+        return {"question": question, "tools": tools}

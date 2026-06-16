@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>医疗Agent问答</title>
+    <style>
+        body { max-width: 1000px; margin: 20px auto; padding: 0 20px; font-family: Arial, sans-serif; }
+        #chat { border: 1px solid #ccc; height: 500px; overflow-y: auto; padding: 15px; background: #fafafa; margin-bottom: 10px; border-radius: 8px; }
+        .user { text-align: right; color: #1a73e8; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
+        .assistant { text-align: left; color: #2e7d32; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
+        .tool-info { font-size: 0.8em; color: #5f6368; margin-top: 4px; }
+        .input-area { display: flex; gap: 10px; }
+        input { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
+        button { padding: 10px 24px; font-size: 16px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+        button:hover { background: #1557b0; }
+        h2 { margin-top: 0; }
+    </style>
+</head>
+<body>
+    <h2>🏥 医学问答助手</h2>
+    <div id="chat"></div>
+    <div class="input-area">
+        <input type="text" id="question" placeholder="输入医学问题..." />
+        <button onclick="send()">发送</button>
+    </div>
+
+    <script>
+        let conversation = [];
+
+        async function send() {
+            const input = document.getElementById('question');
+            const q = input.value.trim();
+            if (!q) return;
+            input.value = '';
+
+            addMessage('user', q);
+            conversation.push({ role: 'user', content: q });
+
+            try {
+                const resp = await fetch('/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: q,
+                        history: conversation.slice(0, -1)
+                    })
+                });
+                const data = await resp.json();
+                const answer = data.result.answer;
+                const toolsUsed = data.result.tools_used || [];
+
+                addMessage('assistant', answer, toolsUsed);
+                conversation.push({ role: 'assistant', content: answer });
+            } catch (err) {
+                addMessage('assistant', '请求失败：' + err.message);
+            }
+        }
+
+        function addMessage(role, text, toolsUsed = null) {
+            const chatDiv = document.getElementById('chat');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = role;
+            msgDiv.innerHTML = `<strong>${role === 'user' ? '您' : '助手'}:</strong> ${text.replace(/\n/g, '<br>')}`;
+            if (toolsUsed && toolsUsed.length) {
+                const toolSpan = document.createElement('div');
+                toolSpan.className = 'tool-info';
+                toolSpan.innerText = `🔧 使用工具: ${toolsUsed.join(', ')}`;
+                msgDiv.appendChild(toolSpan);
+            }
+            chatDiv.appendChild(msgDiv);
+            chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+
+        document.getElementById('question').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') send();
+        });
+    </script>
+</body>
+</html>

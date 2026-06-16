@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  mysql-patient:
+    image: mysql:8.0
+    container_name: mysql-patient
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: your_strong_password
+      MYSQL_DATABASE: patient_db
+      MYSQL_USER: your_app_user
+      MYSQL_PASSWORD: your_app_password
+    volumes:
+      - mysql_patient_data:/var/lib/mysql
+    networks:
+      - med_agent_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 10s
+      retries: 10
+
+  medical-agent:
+    build: .
+    container_name: med_agent
+    ports:
+      - "8000:8000"
+    environment:
+      - MED_AGENT_ROOT=/app
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-qwen-plus}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-text-embedding-v4}
+      - DB_HOST=mysql-patient
+      - DB_USER=your_app_user
+      - DB_PASSWORD=your_app_password
+      - DB_NAME=patient_db
+    volumes:
+      - /mnt/d/A_Study/Agent/Med_Agent/vector_db:/app/vector_db
+      - ./logs:/app/logs
+    depends_on:
+      mysql-patient:
+        condition: service_healthy
+    networks:
+      - med_agent_net
+    restart: unless-stopped
+
+volumes:
+  mysql_patient_data:
+
+networks:
+  med_agent_net:
