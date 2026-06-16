@@ -9,26 +9,22 @@ class Synthesizer:
         )
 
     def run(self, augmented_question, tool_results):
-        # 🚀 优先检查：如果 patient 工具返回了确认信息（✅），直接返回
+        # 优先检查 patient 工具返回的确认信息
         for res in tool_results:
             if not res or not isinstance(res, dict):
                 continue
             if res.get("source") == "patient":
                 answer = res.get("answer", "")
-                # 如果 patient 返回的是保存/更新成功的确认信息
-                if answer.startswith("✅"):
-                    return answer
-                # 如果 patient 返回的是档案查询结果
-                if answer.startswith("📋"):
+                if answer.startswith("✅") or answer.startswith("📋"):
                     return answer
 
-        # 特殊处理：只有一个工具结果，且来源是 patient，直接返回
+        # 只有一个工具结果且是 patient 的直接返回
         if len(tool_results) == 1:
             res = tool_results[0]
             if res and isinstance(res, dict) and res.get("source") == "patient":
                 return res.get("answer", "患者工具未返回有效信息")
 
-        # 否则，正常综合所有工具结果
+        # 综合所有工具结果
         context_parts = []
         for res in tool_results:
             if not res or not isinstance(res, dict):

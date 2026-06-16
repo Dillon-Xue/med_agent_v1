@@ -4,6 +4,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 import re
+import json
+import hashlib
+import time
 
 from agents.planner import Planner
 from agents.executor import Executor
@@ -34,16 +37,57 @@ class ChatRequest(BaseModel):
     question: str
     history: list = []
 
-@app.post("/v1/ask")
-@app.post("/ask")
-def ask(req: ChatRequest):
-    question = req.question
-    history = req.history
+# =========================
+# 简单内存缓存（带 TTL）
+# =========================
+class SimpleCache:
+    def __init__(self):
+        self._cache = {}
+
+    def get(self, key):
+        if key in self._cache:
+            entry = self._cache[key]
+            if time.time() - entry['time'] < entry['ttl']:
+                return entry['value']
+            else:
+                del self._cache[key]
+        return None
+
+    def set(self, key, value, ttl=3600):
+        self._cache[key] = {'value': value, 'time': time.time(), 'ttl': ttl}
+
+    def clear(self):
+        self._cache.clear()
+
+cache = SimpleCache()
+
+def should_cache(question: str, history: list) -> bool:
+    """判断当前问题是否适合缓存"""
+    # 包含指代词 → 不缓存
+    pronouns = ["它", "他", "她", "这个", "那个", "刚才", "上述", "以上", "以下"]
+    if any(word in question for word in pronouns):
+        print(f"[Cache] 包含指代词，不缓存: {question}")
+        return False
+    
+    # 历史为空或只有一条用户问题 → 可以缓存
+    if not history or len(history) <= 1:
+        return True
+    
+    # 其他情况默认不缓存（保守策略）
+    return False
+
+def get_cache_key(question: str) -> str:
+    """缓存 key 只基于问题本身"""
+    return hashlib.md5(question.encode()).hexdigest()
+
+# =========================
+# 核心问答逻辑（独立函数，用于缓存）
+# =========================
+async def process_question(question: str, history: list) -> dict:
+    """执行完整的问答流程，返回最终响应字典"""
     stripped = question.strip()
 
-    # =========================
-    # 🚀 纯中文姓名预检（2-4个中文字符，无其他内容）
-    # =========================
+    # 纯中文姓名预检
     if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', stripped):
         from tools.tool_registry import get_tools
         tools = get_tools()
@@ -51,7 +95,6 @@ def ask(req: ChatRequest):
         if patient_tool:
             info = patient_tool.recall(stripped)
             if info:
-                # 找到患者，直接返回档案
                 return {
                     "success": True,
                     "result": {
@@ -62,12 +105,8 @@ def ask(req: ChatRequest):
                     },
                     "trace": {"executor": []}
                 }
-            # 未找到患者，不返回，继续走正常流程
-            # 这样“布洛芬”会继续走 drug 工具
 
-    # =========================
     # 构建上下文（历史 + 患者档案预加载）
-    # =========================
     if history:
         recent = history[-4:]
         history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent])
@@ -75,9 +114,8 @@ def ask(req: ChatRequest):
     else:
         augmented_question = question
 
-    # 患者档案预加载（用于“患者张三的信息”、“张三的信息”等）
+    # 患者档案预加载
     patient_context = ""
-    # 排除“记住”、“追加”等指令，避免干扰
     if "患者" in question and "记住" not in question and "记录" not in question and "追加" not in question and "补充" not in question:
         name_match = re.search(r'患者\s*([\u4e00-\u9fa5]{2,4})', question)
         if name_match:
@@ -91,7 +129,6 @@ def ask(req: ChatRequest):
                     patient_context = f"【患者档案】姓名：{name}，{info}\n"
                     print(f"[Patient] 已加载患者 {name} 档案")
         else:
-            # 匹配“XXX的信息”格式
             name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的?信息', question)
             if name_match and "记住" not in question and "追加" not in question:
                 name = name_match.group(1)
@@ -109,15 +146,16 @@ def ask(req: ChatRequest):
     else:
         final_augmented = augmented_question
 
-    # =========================
-    # 调用 Planner/Executor/Synthesizer
-    # =========================
+    # 调用 Planner
     plan = planner.run(question)
     tool_list = plan.get("tools", [])
     if not tool_list:
         tool_list = ["drug", "guideline", "literature", "risk"]
 
-    tool_results = executor.run(tool_list, final_augmented)
+    # 异步执行工具
+    tool_results = await executor.run(tool_list, final_augmented)
+
+    # 合成答案
     final_answer = synthesizer.run(final_augmented, tool_results)
 
     return {
@@ -130,3 +168,26 @@ def ask(req: ChatRequest):
         },
         "trace": {"executor": tool_results}
     }
+
+# =========================
+# API 端点
+# =========================
+@app.post("/v1/ask")
+@app.post("/ask")
+async def ask(req: ChatRequest):
+    # 生成缓存 key（只基于问题）
+    cache_key = get_cache_key(req.question)
+    
+    if should_cache(req.question, req.history):
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            print(f"[Cache] 命中缓存，问题：{req.question}")
+            return cached_result
+        print(f"[Cache] 未命中缓存，执行完整流程，问题：{req.question}")
+        result = await process_question(req.question, req.history)
+        cache.set(cache_key, result, ttl=3600)
+        return result
+    else:
+        # 不适合缓存，直接执行完整流程
+        print(f"[Cache] 不适合缓存，执行完整流程，问题：{req.question}")
+        return await process_question(req.question, req.history)
