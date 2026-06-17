@@ -64,19 +64,43 @@ git clone https://github.com/Dillon-Xue/med_agent_v1.git
 cd med_agent_v1
 
 ### 3. 配置环境变量
-"""
-vim  .env
-DASHSCOPE_API_KEY=百炼key
-DASHSCOPE_MODEL=text-embedding-v4
-MED_AGENT_ROOT=向量库目录
-LLM_MODEL_NAME=qwen-plus
-EMBEDDING_MODEL_NAME=text-embedding-v4
-[MySQL配置]
-DB_HOST=localhost
-DB_USER=root
-DB_PASSWORD=your_strong_password
-DB_NAME=patient_db
-"""
+
+复制 `.env.example` 为 `.env` 并填写：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env` 文件：
+
+```env
+# ============================================
+# 阿里云 DashScope 配置
+# ============================================
+DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx   # 你的百炼 API Key
+DASHSCOPE_MODEL=text-embedding-v4               # 嵌入模型
+
+# ============================================
+# 项目路径配置
+# ============================================
+MED_AGENT_ROOT=/mnt/d/A_Study/Agent/Med_Agent   # 向量库所在目录（本地运行）
+# MED_AGENT_ROOT=/app                           # Docker 容器内使用
+
+# ============================================
+# LLM 模型配置
+# ============================================
+LLM_MODEL_NAME=qwen-plus                        # 对话模型
+EMBEDDING_MODEL_NAME=text-embedding-v4          # 嵌入模型
+
+# ============================================
+# MySQL 数据库配置（患者档案存储）
+# ============================================
+DB_HOST=localhost                               # 数据库地址
+DB_USER=root                                    # 数据库用户名
+DB_PASSWORD=your_strong_password                # 数据库密码
+DB_NAME=patient_db                              # 数据库名称
+```
+
 
 ### 4. 配置向量库
 #### 需要先将医药相关的PDF文档放入 data/{drug,guideline,literature,risk} 目录
