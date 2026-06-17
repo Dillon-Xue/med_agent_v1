@@ -83,7 +83,7 @@ DASHSCOPE_MODEL=text-embedding-v4               # 嵌入模型
 # ============================================
 # 项目路径配置
 # ============================================
-MED_AGENT_ROOT=/mnt/d/A_Study/Agent/Med_Agent   # 向量库所在目录（本地运行）
+MED_AGENT_ROOT=/mnt/d/Agent/Med_Agent   # 向量库所在目录（本地运行）
 # MED_AGENT_ROOT=/app                           # Docker 容器内使用
 
 # ============================================
