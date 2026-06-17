@@ -64,6 +64,7 @@ git clone https://github.com/Dillon-Xue/med_agent_v1.git
 cd med_agent_v1
 
 ### 3. 配置环境变量
+"""
 vim  .env
 DASHSCOPE_API_KEY=百炼key
 DASHSCOPE_MODEL=text-embedding-v4
@@ -75,6 +76,7 @@ DB_HOST=localhost
 DB_USER=root
 DB_PASSWORD=your_strong_password
 DB_NAME=patient_db
+"""
 
 ### 4. 配置向量库
 #### 需要先将医药相关的PDF文档放入 data/{drug,guideline,literature,risk} 目录
