@@ -10,3 +10,4 @@ pydantic
 tenacity
 pymysql
 aiocache
+prometheus-client==0.20.0

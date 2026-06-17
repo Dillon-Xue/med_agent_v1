@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -7,11 +7,41 @@ import re
 import json
 import hashlib
 import time
+import logging
+from logging.handlers import RotatingFileHandler
 
 from agents.planner import Planner
 from agents.executor import Executor
 from agents.synthesizer import Synthesizer
 from tools.tool_registry import get_tools
+
+# 配置日志
+LOG_FILE = "logs/app.log"
+os.makedirs("logs", exist_ok=True)
+
+logger = logging.getLogger("med_agent")
+logger.setLevel(logging.INFO)
+
+# 控制台输出（保留）
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+# 文件输出（带轮转）
+file_handler = RotatingFileHandler(
+    LOG_FILE,
+    maxBytes=10*1024*1024,  # 10MB
+    backupCount=5           # 保留5个备份
+)
+file_handler.setLevel(logging.INFO)
+
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
 
 app = FastAPI(title="医疗Agent API", description="基于RAG的多工具医学问答助手", version="1.0.0")
 
@@ -66,7 +96,7 @@ def should_cache(question: str, history: list) -> bool:
     # 包含指代词 → 不缓存
     pronouns = ["它", "他", "她", "这个", "那个", "刚才", "上述", "以上", "以下"]
     if any(word in question for word in pronouns):
-        print(f"[Cache] 包含指代词，不缓存: {question}")
+        logger.info(f"[Cache] 包含指代词，不缓存: {question}")
         return False
     
     # 历史为空或只有一条用户问题 → 可以缓存
@@ -86,6 +116,18 @@ def get_cache_key(question: str) -> str:
 async def process_question(question: str, history: list) -> dict:
     """执行完整的问答流程，返回最终响应字典"""
     stripped = question.strip()
+    greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "你好呀"]
+    if stripped in greetings or stripped.lower() in greetings:
+        return {
+            "success": True,
+            "result": {
+                "answer": "您好！我是医学问答助手，您可以向我咨询药物、指南、文献或风险相关问题。",
+                "tools_used": [],
+                "plan": {"question": question, "tools": []},
+                "tool_results": []
+            },
+            "trace": {"executor": []}
+        }
 
     # 纯中文姓名预检
     if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', stripped):
@@ -108,9 +150,17 @@ async def process_question(question: str, history: list) -> dict:
 
     # 构建上下文（历史 + 患者档案预加载）
     if history:
-        recent = history[-4:]
-        history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent])
-        augmented_question = f"对话历史：\n{history_str}\n当前问题：{question}"
+        recent = history[-5:]
+        filtered = []
+        for msg in recent:
+            if msg["role"] == "user" and msg["content"] in ["你好", "您好", "hi", "hello"]:
+                continue
+            filtered.append(msg)
+        if filtered:
+            history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in filtered])
+            augmented_question = f"对话历史：\n{history_str}\n当前问题：{question}"
+        else:
+            augmented_question = question
     else:
         augmented_question = question
 
@@ -127,7 +177,7 @@ async def process_question(question: str, history: list) -> dict:
                 info = patient_tool.recall(name)
                 if info:
                     patient_context = f"【患者档案】姓名：{name}，{info}\n"
-                    print(f"[Patient] 已加载患者 {name} 档案")
+                    logger.info(f"[Patient] 已加载患者 {name} 档案")
         else:
             name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的?信息', question)
             if name_match and "记住" not in question and "追加" not in question:
@@ -139,7 +189,7 @@ async def process_question(question: str, history: list) -> dict:
                     info = patient_tool.recall(name)
                     if info:
                         patient_context = f"【患者档案】姓名：{name}，{info}\n"
-                        print(f"[Patient] 已加载患者 {name} 档案")
+                        logger.info(f"[Patient] 已加载患者 {name} 档案")
 
     if patient_context:
         final_augmented = patient_context + augmented_question
@@ -181,13 +231,35 @@ async def ask(req: ChatRequest):
     if should_cache(req.question, req.history):
         cached_result = cache.get(cache_key)
         if cached_result:
-            print(f"[Cache] 命中缓存，问题：{req.question}")
+            logger.info(f"[Cache] 命中缓存，问题：{req.question}")
             return cached_result
-        print(f"[Cache] 未命中缓存，执行完整流程，问题：{req.question}")
+        logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{req.question}")
         result = await process_question(req.question, req.history)
         cache.set(cache_key, result, ttl=3600)
         return result
     else:
         # 不适合缓存，直接执行完整流程
-        print(f"[Cache] 不适合缓存，执行完整流程，问题：{req.question}")
+        logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{req.question}")
         return await process_question(req.question, req.history)
+
+from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
+
+# 定义指标
+REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint'])
+REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint'])
+ERROR_COUNT = Counter('http_errors_total', 'Total HTTP errors', ['method', 'endpoint', 'status'])
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    latency = time.time() - start_time
+    REQUEST_COUNT.labels(method=request.method, endpoint=request.url.path).inc()
+    REQUEST_LATENCY.labels(method=request.method, endpoint=request.url.path).observe(latency)
+    if response.status_code >= 400:
+        ERROR_COUNT.labels(method=request.method, endpoint=request.url.path, status=response.status_code).inc()
+    return response
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(REGISTRY), media_type="text/plain")
