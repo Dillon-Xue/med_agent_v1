@@ -9,6 +9,15 @@ class Synthesizer:
         )
 
     def run(self, augmented_question, tool_results):
+        # 优先检查 report 工具返回的信息（生成评估表）
+        for res in tool_results:
+            if not res or not isinstance(res, dict):
+                continue
+            if res.get("source") == "report":
+                answer = res.get("answer", "")
+                if answer:
+                    return answer
+                
         # 优先检查 patient 工具返回的确认信息
         for res in tool_results:
             if not res or not isinstance(res, dict):

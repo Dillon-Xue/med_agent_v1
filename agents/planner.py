@@ -2,6 +2,7 @@ import os
 import re
 from agents.llm_planner import LLMPlanner
 
+
 class Planner:
     def __init__(self, use_llm: bool = True):
         self.rules = {
@@ -9,7 +10,8 @@ class Planner:
             "guideline": ["指南", "治疗", "推荐", "临床", "诊疗"],
             "literature": ["论文", "研究", "文献", "机制", "试验"],
             "risk": ["相互作用", "不良反应", "禁忌", "风险", "安全", "冲突", "合用", "联合用药", "危险"],
-            "patient": ["患者", "记住", "记录", "档案", "病历", "姓名", "信息", "追加", "补充", "病号", "增加"]
+            "patient": ["患者", "记住", "记录", "档案", "病历", "姓名", "信息", "追加", "补充", "病号", "增加"],
+            "report": ["评估表", "生成报告", "生成评估表", "评估报告", "生成病历", "生成档案", "生成记录"]
         }
         self.use_llm = use_llm
         if self.use_llm:
@@ -26,32 +28,48 @@ class Planner:
         if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', stripped):
             tools.add("patient")
 
-        # 2. 使用正则检测 patient 相关关键词（比 in 更健壮）
+        # 2. 使用正则检测 patient 相关关键词
         if re.search(r'患者|记住|记录|档案|病历|信息|追加|补充|病号|增加', question):
             tools.add("patient")
 
-        # 3. 匹配其他工具的关键词（跳过 patient）
+        # 3. 使用正则检测 report 相关关键词
+        if re.search(r'评估表|生成报告|生成评估表|评估报告|生成病历|生成档案|生成记录', question):
+            tools.add("report")
+
+        # 4. 匹配其他工具的关键词（跳过 patient 和 report）
         for tool, keywords in self.rules.items():
-            if tool == "patient":
+            if tool in ["patient", "report"]:
                 continue
             for kw in keywords:
                 if kw in question:
                     tools.add(tool)
 
-        # 4. 默认工具
+        # 5. 默认工具
         if not tools:
             return ["drug", "guideline", "literature", "risk"]
 
-        # 5. 如果只有 patient（纯姓名触发），追加默认工具
+        # 6. 如果只有 patient（纯姓名触发），追加默认工具
         if tools == {"patient"}:
             tools.update(["drug", "guideline", "literature", "risk"])
 
         return list(tools)
 
     def run(self, question: str) -> dict:
+        # 强制识别“记住患者”和“记录患者”指令
+        if re.search(r'记住患者|记录患者', question):
+            print(f"[Planner] 强制识别为 patient 工具: {question}")
+            return {"question": question, "tools": ["patient"]}
         # 先运行规则
         tools = self.rule_based(question)
         has_patient = "patient" in tools
+        has_report = "report" in tools
+
+        
+    
+        # 如果规则匹配到了 report，直接返回（不经过 LLM 重新规划）
+        if has_report:
+            print(f"[Planner] 检测到 report 关键词，强制使用: {tools}")
+            return {"question": question, "tools": tools}
 
         # LLM 重新规划
         if self.use_llm and (len(tools) == 0 or len(tools) > 3):

@@ -23,7 +23,7 @@ class Executor:
             try:
                 res = await asyncio.wait_for(
                     loop.run_in_executor(self._executor, tool.run, question),
-                    timeout=10.0
+                    timeout=60.0
                 )
                 return res if res is not None else None
             except asyncio.TimeoutError:

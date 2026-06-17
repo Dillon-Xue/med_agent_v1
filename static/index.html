@@ -8,6 +8,8 @@
         #chat { border: 1px solid #ccc; height: 500px; overflow-y: auto; padding: 15px; background: #fafafa; margin-bottom: 10px; border-radius: 8px; }
         .user { text-align: right; color: #1a73e8; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
         .assistant { text-align: left; color: #2e7d32; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
+        .assistant a { color: #1a73e8; text-decoration: underline; }
+        .assistant a:hover { color: #1557b0; }
         .tool-info { font-size: 0.8em; color: #5f6368; margin-top: 4px; }
         .input-area { display: flex; gap: 10px; }
         input { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
@@ -60,7 +62,21 @@
             const chatDiv = document.getElementById('chat');
             const msgDiv = document.createElement('div');
             msgDiv.className = role;
-            msgDiv.innerHTML = `<strong>${role === 'user' ? '您' : '助手'}:</strong> ${text.replace(/\n/g, '<br>')}`;
+
+            // 将 [链接文本](url) 转换为 <a href="url">链接文本</a>
+            let formattedText = text.replace(/\n/g, '<br>');
+            formattedText = formattedText.replace(
+                /\[([^\]]+)\]\(([^)]+)\)/g,
+                function(match, linkText, url) {
+                    // 如果 URL 以 /reports/ 开头，拼接完整地址
+                    if (url.startsWith('/reports/')) {
+                        url = window.location.origin + url;
+                    }
+                    return '<a href="' + url + '" target="_blank" download>' + linkText + '</a>';
+                }
+            );
+
+            msgDiv.innerHTML = `<strong>${role === 'user' ? '您' : '助手'}:</strong> ${formattedText}`;
             if (toolsUsed && toolsUsed.length) {
                 const toolSpan = document.createElement('div');
                 toolSpan.className = 'tool-info';
