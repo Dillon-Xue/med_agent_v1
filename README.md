@@ -68,20 +68,21 @@ DB_PASSWORD=your_strong_password
 DB_NAME=patient_db
 
 ### 4. 配置向量库
-# 需要先将医药相关的PDF文档放入 data/{drug,guideline,literature,risk} 目录
+#### 需要先将医药相关的PDF文档放入 data/{drug,guideline,literature,risk} 目录
 python ingest.py
 
 ### 5. 启动服务
-# 方式一：直接运行
+- 方式一：直接运行
 pip install -r requirements.txt
 uvicorn chat:app --reload
 
-# 方式二：Docker 一键启动
+- 方式二：Docker 一键启动
 docker-compose up -d
 
 ### 6. 访问前端
-http://localhost:8000/static/index.html  问答页面
-http://localhost:8000/docs  接口文档
-http://localhost:8000/health   状态检查
-http://localhost:8000/metrics   监控
+- 问答页面 http://localhost:8000/static/index.html 
+- 接口文档 http://localhost:8000/docs  
+- 状态检查 http://localhost:8000/health   
+- 监控信息 http://localhost:8000/metrics   
+
 
