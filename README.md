@@ -33,13 +33,23 @@
 | **监控运维** | Prometheus 指标暴露 + 日志轮转 + 健康检查 |
 
 ## 架构图
-用户 → FastAPI (/ask) → Planner (规则+LLM) → Executor (并行调用)
-↓
-drug / guideline / literature / risk / patient
-↓
-Synthesizer (来源标注/冲突处理)
-↓
-返回答案
+```mermaid
+graph TD
+    A[用户] --> B[FastAPI /ask]
+    B --> C[Planner<br>规则 + LLM 混合规划]
+    C --> D[Executor<br>并行调用]
+    D --> E1[drug 工具]
+    D --> E2[guideline 工具]
+    D --> E3[literature 工具]
+    D --> E4[risk 工具]
+    D --> E5[patient 工具]
+    E1 --> F[Synthesizer<br>来源标注 / 去重 / 冲突处理]
+    E2 --> F
+    E3 --> F
+    E4 --> F
+    E5 --> F
+    F --> G[返回最终答案]
+```
 
 
 ## 快速开始
