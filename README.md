@@ -1,4 +1,3 @@
-cat > README.md << 'EOF'
 # 医疗 Agent — 基于 RAG 的多工具医学问答助手
 
 ## 项目简介
