@@ -68,6 +68,31 @@ class ChatRequest(BaseModel):
     history: list = []
 
 # =========================
+# 会话状态管理（多候选人选择）
+# =========================
+pending_selection = {}  # {session_id: {"candidates": [...], "action": "generate_report"}}
+current_patient = {}    # {session_id: "张三"}
+
+def get_session_id(request: Request) -> str:
+    """生成会话ID（基于IP + User-Agent）"""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("User-Agent", "")[:30]
+    return f"{client_ip}_{user_agent}"
+
+def set_current_patient(session_id: str, name: str):
+    """设置当前会话的操作患者"""
+    current_patient[session_id] = name
+
+def get_current_patient(session_id: str) -> str:
+    """获取当前会话的操作患者"""
+    return current_patient.get(session_id)
+
+def clear_current_patient(session_id: str):
+    """清除当前会话的操作患者"""
+    if session_id in current_patient:
+        del current_patient[session_id]
+
+# =========================
 # 简单内存缓存（带 TTL）
 # =========================
 class SimpleCache:
@@ -93,17 +118,12 @@ cache = SimpleCache()
 
 def should_cache(question: str, history: list) -> bool:
     """判断当前问题是否适合缓存"""
-    # 包含指代词 → 不缓存
     pronouns = ["它", "他", "她", "这个", "那个", "刚才", "上述", "以上", "以下"]
     if any(word in question for word in pronouns):
         logger.info(f"[Cache] 包含指代词，不缓存: {question}")
         return False
-    
-    # 历史为空或只有一条用户问题 → 可以缓存
     if not history or len(history) <= 1:
         return True
-    
-    # 其他情况默认不缓存（保守策略）
     return False
 
 def get_cache_key(question: str) -> str:
@@ -224,27 +244,112 @@ async def process_question(question: str, history: list) -> dict:
 # =========================
 @app.post("/v1/ask")
 @app.post("/ask")
-async def ask(req: ChatRequest):
-    # 生成缓存 key（只基于问题）
-    cache_key = get_cache_key(req.question)
-    
-    if should_cache(req.question, req.history):
+async def ask(req: ChatRequest, request: Request):
+    question = req.question.strip()
+    session_id = get_session_id(request)
+
+    # =========================
+    # 检查是否有待处理的多候选人选择
+    # =========================
+    if session_id in pending_selection:
+        selection = pending_selection[session_id]
+        candidates = selection.get("candidates", [])
+
+        # 如果用户输入是数字
+        if question.isdigit():
+            idx = int(question) - 1
+            if 0 <= idx < len(candidates):
+                candidate = candidates[idx]
+                # 清理状态
+                del pending_selection[session_id]
+                # 使用选中的患者生成评估表
+                from tools.report_tool import ReportTool
+                report_tool = ReportTool()
+                result = report_tool._generate_from_candidate(candidate)
+                # 将结果包装成标准响应格式
+                return {
+                    "success": result.get("success", True),
+                    "result": {
+                        "answer": result.get("answer", ""),
+                        "tools_used": ["report"],
+                        "plan": {"question": question, "tools": ["report"]},
+                        "tool_results": []
+                    },
+                    "trace": {"executor": []}
+                }
+            else:
+                # 无效数字，重新显示候选列表
+                return {
+                    "success": False,
+                    "result": {
+                        "answer": f"❌ 无效选择，请输入 1-{len(candidates)} 之间的数字。",
+                        "tools_used": [],
+                        "plan": {"question": question, "tools": []},
+                        "tool_results": []
+                    },
+                    "trace": {"executor": []}
+                }
+
+        # 如果用户输入包含姓名，尝试精确匹配
+        name_match = re.search(r'([\u4e00-\u9fa5]{2,4})', question)
+        if name_match:
+            name = name_match.group(1)
+            for c in candidates:
+                if c.get("name") == name:
+                    # 精确匹配到姓名，使用该候选
+                    del pending_selection[session_id]
+                    from tools.report_tool import ReportTool
+                    report_tool = ReportTool()
+                    result = report_tool._generate_from_candidate(c)
+                    return {
+                        "success": result.get("success", True),
+                        "result": {
+                            "answer": result.get("answer", ""),
+                            "tools_used": ["report"],
+                            "plan": {"question": question, "tools": ["report"]},
+                            "tool_results": []
+                        },
+                        "trace": {"executor": []}
+                    }
+
+        # 如果用户输入的是身份证号，更新当前患者并生成
+        id_match = re.fullmatch(r'\s*(\d{17}[\dXx])\s*', question)
+        if id_match:
+            # 由 patient_tool 处理，继续正常流程
+            pass
+
+        # 如果用户输入其他内容，继续正常流程
+
+    # =========================
+    # 正常问答流程
+    # =========================
+    cache_key = get_cache_key(question)
+
+    if should_cache(question, req.history):
         cached_result = cache.get(cache_key)
         if cached_result:
-            logger.info(f"[Cache] 命中缓存，问题：{req.question}")
+            logger.info(f"[Cache] 命中缓存，问题：{question}")
             return cached_result
-        logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{req.question}")
-        result = await process_question(req.question, req.history)
+        logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{question}")
+        result = await process_question(question, req.history)
         cache.set(cache_key, result, ttl=3600)
         return result
     else:
-        # 不适合缓存，直接执行完整流程
-        logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{req.question}")
-        return await process_question(req.question, req.history)
+        logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{question}")
+        return await process_question(question, req.history)
 
+# =========================
+# 健康检查
+# =========================
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+# =========================
+# Prometheus 监控
+# =========================
 from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
 
-# 定义指标
 REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint'])
 REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint'])
 ERROR_COUNT = Counter('http_errors_total', 'Total HTTP errors', ['method', 'endpoint', 'status'])
@@ -263,3 +368,19 @@ async def metrics_middleware(request: Request, call_next):
 @app.get("/metrics")
 async def metrics():
     return Response(generate_latest(REGISTRY), media_type="text/plain")
+
+# =========================
+# 报告下载接口
+# =========================
+from fastapi.responses import FileResponse
+
+@app.get("/reports/{filename}")
+async def download_report(filename: str):
+    file_path = f"reports/{filename}"
+    if not os.path.exists(file_path):
+        return {"error": "文件不存在"}
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=filename
+    )

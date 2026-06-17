@@ -23,6 +23,7 @@ def init_tools():
     from tools.guideline_tool import GuidelineTool
     from tools.risk_tool import RiskTool
     from tools.patient_tool import PatientTool   # 导入 MySQL 版
+    from tools.report_tool import ReportTool
 
     TOOLS = {
         "rag": RAGTool(BASE_DIR, api_key),
@@ -31,6 +32,7 @@ def init_tools():
         "guideline": GuidelineTool(BASE_DIR, api_key),
         "risk": RiskTool(BASE_DIR, api_key),
         "patient": PatientTool(),   # 无需额外参数，从环境变量读取配置
+        "report": ReportTool(),
     }
 
     print("\n========== TOOL INIT OK ==========")
