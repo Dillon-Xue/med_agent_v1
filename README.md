@@ -60,8 +60,8 @@ graph TD
 - 阿里云 DashScope API Key
 
 ### 2. 克隆项目
-git clone https://github.com/Dillon-Xue/med_agent_v1.git
-cd med_agent_v1
+- git clone https://github.com/Dillon-Xue/med_agent_v1.git
+- cd med_agent_v1
 
 ### 3. 配置环境变量
 
