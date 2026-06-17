@@ -101,7 +101,6 @@ DB_PASSWORD=your_strong_password                # 数据库密码
 DB_NAME=patient_db                              # 数据库名称
 ```
 
-
 ### 4. 配置向量库
 #### 需要先将医药相关的PDF文档放入 data/{drug,guideline,literature,risk} 目录
 python ingest.py
@@ -191,5 +190,3 @@ docker-compose up -d
 | `docker-compose.yml` | **Docker Compose 编排**。定义 `medical-agent` 和 `mysql-patient` 两个服务。 |
 | `requirements.txt` | **Python 依赖清单**。项目所需的所有 Python 包。 |
 | `README.md` | **项目文档**。介绍项目、技术栈、架构图、快速开始、API 文档。 |
-
-
