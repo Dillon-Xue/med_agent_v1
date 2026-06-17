@@ -51,7 +51,6 @@ Synthesizer (来源标注/冲突处理)
 - 阿里云 DashScope API Key
 
 ### 2. 克隆项目
-```bash
 git clone https://github.com/Dillon-Xue/med_agent_v1.git
 cd med_agent_v1
 
