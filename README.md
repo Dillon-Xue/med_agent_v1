@@ -57,6 +57,7 @@ graph TD
     F --> G[返回最终答案]
 ```
 ## V2 LangGraph 交互式问诊架构
+```mermaid
 graph TD
     A[用户] --> B[FastAPI /consult]
     B --> C[LangGraph 状态流转图]
@@ -66,7 +67,7 @@ graph TD
     E --> Z[结束本轮，返回追问话术]
     F --> G[synthesize<br>生成个性化回答+自动保存患者档案]
     G --> Z
-
+```
 
 ## 快速开始
 
