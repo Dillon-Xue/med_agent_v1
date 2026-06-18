@@ -373,7 +373,6 @@ async def metrics():
 # 报告下载接口
 # =========================
 from fastapi.responses import FileResponse
-
 @app.get("/reports/{filename}")
 async def download_report(filename: str):
     file_path = f"reports/{filename}"
@@ -384,3 +383,57 @@ async def download_report(filename: str):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=filename
     )
+
+# =========================
+# LangGraph 问诊端点（V2）
+# =========================
+from agents.consult_graph import ConsultGraph
+
+consult_graph = ConsultGraph()
+
+@app.post("/consult")
+async def consult(req: ChatRequest):
+    """LangGraph 问诊端点（多轮交互）"""
+    question = req.question
+    history = req.history
+
+    answer = consult_graph.run(question, history)
+
+    return {
+        "success": True,
+        "result": {
+            "answer": answer,
+            "tools_used": [],
+            "plan": {"question": question, "mode": "consult"},
+            "tool_results": []
+        },
+        "trace": {"executor": []}
+    }
+
+@app.post("/consult")
+async def consult(req: ChatRequest):
+    try:
+        question = req.question
+        history = req.history
+        answer = await consult_graph.run(question, history)
+        return {
+            "success": True,
+            "result": {
+                "answer": answer,
+                "tools_used": [],
+                "plan": {"question": question, "mode": "consult"},
+                "tool_results": []
+            },
+            "trace": {"executor": []}
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "result": {
+                "answer": f"问诊处理失败：{str(e)}",
+                "tools_used": [],
+                "plan": {"question": req.question, "mode": "consult"},
+                "tool_results": []
+            },
+            "trace": {"executor": []}
+        }

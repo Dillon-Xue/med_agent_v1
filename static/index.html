@@ -16,6 +16,28 @@
         button { padding: 10px 24px; font-size: 16px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
         button:hover { background: #1557b0; }
         h2 { margin-top: 0; }
+        .mode-btn {
+        padding: 8px 16px;
+        border: 2px solid #ccc;
+        background: #f5f5f5;
+        cursor: pointer;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: normal;
+        color: #555;
+        transition: all 0.2s ease;
+    }
+    .mode-btn:hover {
+        background: #e8e8e8;
+        border-color: #aaa;
+    }
+    .mode-btn.active {
+        background: #1a73e8;
+        color: #ffffff;
+        font-weight: bold;
+        border-color: #1a73e8;
+        box-shadow: 0 2px 8px rgba(26, 115, 232, 0.4);
+    }
     </style>
 </head>
 <body>
@@ -25,9 +47,20 @@
         <input type="text" id="question" placeholder="输入医学问题..." />
         <button onclick="send()">发送</button>
     </div>
+    <div class="mode-selector" style="margin-bottom: 10px;">
+        <button id="mode-quick" class="mode-btn active" onclick="setMode('quick')">⚡ 快速问答</button>
+        <button id="mode-consult" class="mode-btn" onclick="setMode('consult')">🩺 智能问诊</button>
+    </div>
 
     <script>
         let conversation = [];
+        let currentMode = 'quick';
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('mode-quick').classList.toggle('active', mode === 'quick');
+            document.getElementById('mode-consult').classList.toggle('active', mode === 'consult');
+        }
 
         async function send() {
             const input = document.getElementById('question');
@@ -39,12 +72,14 @@
             conversation.push({ role: 'user', content: q });
 
             try {
-                const resp = await fetch('/ask', {
+                const historyToSend = conversation;
+                const endpoint = currentMode === 'quick' ? '/ask' : '/consult';
+                const resp = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         question: q,
-                        history: conversation.slice(0, -1)
+                        history: historyToSend
                     })
                 });
                 const data = await resp.json();

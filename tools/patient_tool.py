@@ -108,6 +108,13 @@ class PatientTool:
     def remember(self, name: str, info: str, append: bool = True) -> dict:
         name = name.strip()
         info = info.strip()
+        # 检查姓名是否有效
+        if not name or name == "患者":
+            return build_response(
+                answer="❌ 无法提取患者姓名，请使用格式：记住患者 张三：信息",
+                source="patient",
+                success=False
+            )
 
         # 提取身份证号
         id_match = re.search(r'身份证号?\s*[:：]?\s*(\d{17}[\dXx])', info)
