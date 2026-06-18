@@ -63,12 +63,18 @@ graph TD
     B --> C[LangGraph 状态流转图]
     C --> D[analyze_gap<br>分析患者信息缺失项]
     D -->|存在缺失 & 未超限轮次| E[ask_missing<br>主动向用户追问信息]
-    D -->|信息完整 / 追问超限| F[execute_tools<br>并行调用检索工具+加载患者档案]
+    D -->|信息完整 / 追问超限| F[execute_tools<br>Planner决策 + Executor并行]
     E --> Z[结束本轮，返回追问话术]
-    F --> G[synthesize<br>生成个性化回答+自动保存患者档案]
-    G --> Z
+    F --> G[drug 工具<br>药品说明书检索]
+    F --> H[guideline 工具<br>临床指南检索]
+    F --> I[literature 工具<br>医学文献检索]
+    F --> J[risk 工具<br>药物相互作用分析]
+    G --> K[synthesize<br>综合结果 + 自动保存档案]
+    H --> K
+    I --> K
+    J --> K
+    K --> Z
 ```
-
 ## 快速开始
 
 ### 1. 环境要求
