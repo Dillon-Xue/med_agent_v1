@@ -115,8 +115,10 @@ graph TD
     
     F --> V[Planner-Executor-Synthesizer]
     V --> W[返回答案]
-    K --> X[返回下载链接]
-    S --> Y[显示列表]
+    
+    K --> Y[显示结果]
+    W --> Y[显示结果]
+    S --> Y[显示结果]
     T --> Y[显示结果]
     U --> Y[显示结果]
 ```
