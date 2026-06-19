@@ -11,6 +11,7 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 from contextvars import ContextVar
+from typing import List, Optional
 
 from agents.planner import Planner
 from agents.executor import Executor
@@ -56,9 +57,54 @@ logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
 # =========================
+# 响应模型（用于 Swagger 文档）
+# =========================
+class ToolResult(BaseModel):
+    success: bool
+    id: str
+    source: str
+    answer: str
+    debug: dict
+    trace: list
+    timestamp: float
+
+class ResultData(BaseModel):
+    answer: str
+    tools_used: List[str]
+    plan: dict
+    tool_results: List[ToolResult]
+
+class AskResponse(BaseModel):
+    success: bool
+    result: ResultData
+    trace: dict
+
+class ApprovalItem(BaseModel):
+    id: str
+    title: str
+    requester: str
+    created_at: str
+
+class ApprovalsResponse(BaseModel):
+    count: int
+    items: List[ApprovalItem]
+
+# =========================
 # FastAPI App
 # =========================
-app = FastAPI(title="医疗Agent API", description="基于RAG的多工具医学问答助手", version="1.0.0")
+tags_metadata = [
+    {"name": "问答", "description": "医学问答相关接口（快速问答、智能问诊）"},
+    {"name": "审批", "description": "审批管理相关接口（列表、通过、驳回）"},
+    {"name": "报告", "description": "报告生成与下载相关接口"},
+    {"name": "运维", "description": "系统运维相关接口（健康检查、监控指标）"}
+]
+
+app = FastAPI(
+    title="医疗Agent API",
+    description="基于RAG的多工具医学问答助手，支持快速问答、智能问诊、评估表生成、多租户审批",
+    version="3.0.0",
+    openapi_tags=tags_metadata
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -251,8 +297,20 @@ async def process_question(question: str, history: list) -> dict:
 # =========================
 # 快速问答端点 (/ask)
 # =========================
-@app.post("/v1/ask")
-@app.post("/ask")
+@app.post(
+    "/v1/ask",
+    tags=["问答"],
+    summary="快速问答（V1）",
+    description="单轮快速问答，适用于明确、完整的医学问题。支持多工具协同（drug/guideline/literature/risk/patient）。",
+    response_model=AskResponse
+)
+@app.post(
+    "/ask",
+    tags=["问答"],
+    summary="快速问答（V1）",
+    description="单轮快速问答，适用于明确、完整的医学问题。支持多工具协同（drug/guideline/literature/risk/patient）。",
+    response_model=AskResponse
+)
 async def ask(req: ChatRequest, request: Request):
     global current_session_user
     question = req.question.strip()
@@ -344,7 +402,13 @@ async def ask(req: ChatRequest, request: Request):
 # =========================
 # 智能问诊端点 (/consult)
 # =========================
-@app.post("/consult")
+@app.post(
+    "/consult",
+    tags=["问答"],
+    summary="智能问诊（V2）",
+    description="基于 LangGraph 的多轮交互式问诊。Agent 会主动追问缺失信息（年龄、过敏史、用药史），收集完整后给出个性化用药建议。",
+    response_model=AskResponse
+)
 async def consult(req: ChatRequest):
     global current_session_user
     question = req.question.strip()
@@ -446,7 +510,13 @@ async def consult(req: ChatRequest):
 # =========================
 # 审批列表接口（用于前端侧边栏）
 # =========================
-@app.get("/approvals")
+@app.get(
+    "/approvals",
+    tags=["审批"],
+    summary="获取待审批列表",
+    description="查询当前用户的待审批项列表，供前端侧边栏轮询使用。支持多租户隔离，只返回当前租户的数据。",
+    response_model=ApprovalsResponse
+)
 async def get_approvals():
     from tools.tool_registry import get_tools
     from chat import current_session_user
@@ -466,7 +536,12 @@ async def get_approvals():
 # =========================
 # 健康检查
 # =========================
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["运维"],
+    summary="健康检查",
+    description="检查服务是否正常运行，返回固定状态 'ok'。"
+)
 async def health_check():
     return {"status": "ok"}
 
@@ -504,14 +579,28 @@ async def metrics_middleware(request: Request, call_next):
         ).inc()
     return response
 
-@app.get("/metrics")
+@app.get(
+    "/metrics",
+    tags=["运维"],
+    summary="Prometheus 监控指标",
+    description="暴露 Prometheus 格式的监控指标（请求数、延迟、错误数等），支持租户维度拆分。"
+)
 async def metrics():
     return Response(generate_latest(REGISTRY), media_type="text/plain")
 
 # =========================
 # 报告下载
 # =========================
-@app.get("/reports/{filename}")
+@app.get(
+    "/reports/{filename}",
+    tags=["报告"],
+    summary="下载评估表",
+    description="根据文件名下载生成的评估表 Word 文档（.docx 格式）。",
+    responses={
+        200: {"description": "文件下载成功", "content": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document": {}}},
+        404: {"description": "文件不存在"}
+    }
+)
 async def download_report(filename: str):
     file_path = f"reports/{filename}"
     if not os.path.exists(file_path):
