@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-
+from tools.approval_tool import ApprovalTool
 load_dotenv()
 
 BASE_DIR = os.getenv("MED_AGENT_ROOT", os.getcwd())
@@ -33,6 +33,7 @@ def init_tools():
         "risk": RiskTool(BASE_DIR, api_key),
         "patient": PatientTool(),   # 无需额外参数，从环境变量读取配置
         "report": ReportTool(),
+        "approval": ApprovalTool(),
     }
 
     print("\n========== TOOL INIT OK ==========")

@@ -4,106 +4,233 @@
     <meta charset="UTF-8">
     <title>医疗Agent问答</title>
     <style>
-        body { max-width: 1000px; margin: 20px auto; padding: 0 20px; font-family: Arial, sans-serif; }
-        #chat { border: 1px solid #ccc; height: 500px; overflow-y: auto; padding: 15px; background: #fafafa; margin-bottom: 10px; border-radius: 8px; }
+        /* ===== 全局样式 ===== */
+        body { max-width: 1400px; margin: 20px auto; padding: 0 20px; font-family: Arial, sans-serif; }
+        h2 { margin-top: 0; }
+
+        /* ===== 模式切换按钮 ===== */
+        .mode-btn { padding: 8px 16px; border: 2px solid #ccc; background: #f5f5f5; cursor: pointer; border-radius: 6px; font-size: 14px; font-weight: normal; color: #555; transition: all 0.2s ease; }
+        .mode-btn:hover { background: #e8e8e8; border-color: #aaa; }
+        .mode-btn.active { background: #1a73e8; color: #ffffff; font-weight: bold; border-color: #1a73e8; box-shadow: 0 2px 8px rgba(26, 115, 232, 0.4); }
+
+        /* ===== 主布局 ===== */
+        .main-container {
+            display: flex;
+            gap: 16px;
+            min-height: calc(100vh - 160px);
+            height: auto;
+        }
+
+        /* ===== 侧边栏 ===== */
+        .sidebar {
+            width: 220px;
+            min-width: 180px;
+            background: #f5f5f5;
+            border-right: 1px solid #ddd;
+            padding: 12px;
+            overflow-y: auto;
+            flex-shrink: 0;
+            border-radius: 8px 0 0 8px;
+        }
+        .sidebar .tab-btn {
+            display: block;
+            width: 100%;
+            padding: 10px 12px;
+            border: none;
+            background: transparent;
+            text-align: left;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 6px;
+            margin-bottom: 4px;
+            position: relative;
+        }
+        .sidebar .tab-btn:hover { background: #e8e8e8; }
+        .sidebar .tab-btn.active { background: #1a73e8; color: white; }
+        .sidebar .badge {
+            float: right;
+            background: #e74c3c;
+            color: white;
+            border-radius: 50%;
+            padding: 0 8px;
+            font-size: 12px;
+            line-height: 20px;
+            min-width: 20px;
+            text-align: center;
+        }
+        .sidebar .tab-content { display: none; margin-top: 10px; }
+        .sidebar .tab-content.active { display: block; }
+        .sidebar .tab-content p { font-size: 12px; color: #888; margin: 4px 0; }
+
+        /* ===== 聊天区 ===== */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        #chat {
+            flex: 1;
+            border: 1px solid #ccc;
+            overflow-y: auto;
+            padding: 15px;
+            background: #fafafa;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            min-height: 300px;
+        }
         .user { text-align: right; color: #1a73e8; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
         .assistant { text-align: left; color: #2e7d32; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
         .assistant a { color: #1a73e8; text-decoration: underline; }
         .assistant a:hover { color: #1557b0; }
         .tool-info { font-size: 0.8em; color: #5f6368; margin-top: 4px; }
-        .input-area { display: flex; gap: 10px; }
-        input { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
-        button { padding: 10px 24px; font-size: 16px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
-        button:hover { background: #1557b0; }
-        h2 { margin-top: 0; }
-        .mode-btn {
-        padding: 8px 16px;
-        border: 2px solid #ccc;
-        background: #f5f5f5;
-        cursor: pointer;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: normal;
-        color: #555;
-        transition: all 0.2s ease;
-    }
-    .mode-btn:hover {
-        background: #e8e8e8;
-        border-color: #aaa;
-    }
-    .mode-btn.active {
-        background: #1a73e8;
-        color: #ffffff;
-        font-weight: bold;
-        border-color: #1a73e8;
-        box-shadow: 0 2px 8px rgba(26, 115, 232, 0.4);
-    }
+
+        /* ===== 输入区 ===== */
+        .input-area { display: flex; gap: 10px; flex-shrink: 0; }
+        .input-area input { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
+        .input-area button { padding: 10px 24px; font-size: 16px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+        .input-area button:hover { background: #1557b0; }
+
+        .mode-selector { margin-bottom: 10px; flex-shrink: 0; display: flex; gap: 8px; }
+
+        /* ===== 审批列表 ===== */
+        #approval-list ul { list-style: none; padding: 0; margin: 0; }
+        #approval-list li { padding: 8px 0; border-bottom: 1px solid #eee; }
+        #approval-list li strong { font-size: 14px; }
+        #approval-list li small { color: #888; font-size: 12px; display: block; margin-top: 2px; }
+        #approval-list .empty { color: #888; text-align: center; padding: 20px 0; }
+        #approval-list .refresh-btn { margin-top: 10px; width: 100%; padding: 8px; background: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; }
+        #approval-list .refresh-btn:hover { background: #ddd; }
     </style>
 </head>
 <body>
+
     <h2>🏥 医学问答助手</h2>
-    <div id="chat"></div>
-    <div class="input-area">
-        <input type="text" id="question" placeholder="输入医学问题..." />
-        <button onclick="send()">发送</button>
-    </div>
-    <div class="mode-selector" style="margin-bottom: 10px;">
-        <button id="mode-quick" class="mode-btn active" onclick="setMode('quick')">⚡ 快速问答</button>
-        <button id="mode-consult" class="mode-btn" onclick="setMode('consult')">🩺 智能问诊</button>
+
+    <div class="main-container">
+
+        <!-- ===== 侧边栏 ===== -->
+        <div class="sidebar" id="sidebar">
+            <div class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 医药助手</div>
+            <div class="tab-btn" data-tab="approval" onclick="switchTab('approval')">
+                📋 审批助手
+                <span class="badge" id="approval-badge">0</span>
+            </div>
+            <div class="tab-content active" id="tab-chat">
+                <p>当前租户：<span id="tenant-display">default</span></p>
+                <p style="font-size:12px; color:#aaa;">💡 智能问诊输入「我是XXX」绑定患者</p>
+            </div>
+            <div class="tab-content" id="tab-approval">
+                <div id="approval-list"><p class="empty">加载中...</p></div>
+                <button class="refresh-btn" onclick="refreshApprovals()">🔄 刷新</button>
+            </div>
+        </div>
+
+        <!-- ===== 聊天区 ===== -->
+        <div class="chat-area">
+            <div class="mode-selector">
+                <button id="mode-quick" class="mode-btn active" onclick="setMode('quick')">⚡ 快速问答</button>
+                <button id="mode-consult" class="mode-btn" onclick="setMode('consult')">🩺 智能问诊</button>
+            </div>
+            <div id="chat"></div>
+            <div class="input-area">
+                <input type="text" id="question" placeholder="输入医学问题..." />
+                <button onclick="send()">发送</button>
+            </div>
+        </div>
+
     </div>
 
     <script>
-        let conversation = [];
+        // ============================================================
+        // 全局状态
+        // ============================================================
         let currentMode = 'quick';
+        let currentTab = 'chat';
 
+        // 三个独立的对话历史
+        const conversations = {
+            chat_quick: [],
+            chat_consult: [],
+            approval: []
+        };
+
+        // 请求 ID 管理（用于丢弃过期的异步响应）
+        let activeRequestId = 0;
+
+        // ============================================================
+        // 获取当前会话的 key
+        // ============================================================
+        function getCurrentConversationKey() {
+            if (currentTab === 'approval') return 'approval';
+            if (currentMode === 'quick') return 'chat_quick';
+            return 'chat_consult';
+        }
+
+        function getCurrentConversation() {
+            return conversations[getCurrentConversationKey()] || [];
+        }
+
+        // ============================================================
+        // 模式切换
+        // ============================================================
         function setMode(mode) {
+            activeRequestId++;
             currentMode = mode;
             document.getElementById('mode-quick').classList.toggle('active', mode === 'quick');
             document.getElementById('mode-consult').classList.toggle('active', mode === 'consult');
+
+            const chatDiv = document.getElementById('chat');
+            chatDiv.innerHTML = '';
+            const key = getCurrentConversationKey();
+            const saved = conversations[key] || [];
+            saved.forEach(msg => {
+                renderMessage(msg.role, msg.content, msg.tools || null);
+            });
         }
 
-        async function send() {
-            const input = document.getElementById('question');
-            const q = input.value.trim();
-            if (!q) return;
-            input.value = '';
+        // ============================================================
+        // Tab 切换（去掉自动刷新）
+        // ============================================================
+        function switchTab(tab) {
+            activeRequestId++;
+            currentTab = tab;
 
-            addMessage('user', q);
-            conversation.push({ role: 'user', content: q });
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.getElementById(`tab-${tab}`).classList.add('active');
 
-            try {
-                const historyToSend = conversation;
-                const endpoint = currentMode === 'quick' ? '/ask' : '/consult';
-                const resp = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        question: q,
-                        history: historyToSend
-                    })
-                });
-                const data = await resp.json();
-                const answer = data.result.answer;
-                const toolsUsed = data.result.tools_used || [];
+            const chatDiv = document.getElementById('chat');
+            chatDiv.innerHTML = '';
+            const key = getCurrentConversationKey();
+            const saved = conversations[key] || [];
+            saved.forEach(msg => {
+                renderMessage(msg.role, msg.content, msg.tools || null);
+            });
 
-                addMessage('assistant', answer, toolsUsed);
-                conversation.push({ role: 'assistant', content: answer });
-            } catch (err) {
-                addMessage('assistant', '请求失败：' + err.message);
+            const modeSelector = document.querySelector('.mode-selector');
+            if (tab === 'approval') {
+                modeSelector.style.display = 'none';
+                // 手动刷新一次，不启动定时器
+                refreshApprovals();
+            } else {
+                modeSelector.style.display = 'flex';
             }
         }
 
-        function addMessage(role, text, toolsUsed = null) {
+        // ============================================================
+        // 渲染消息
+        // ============================================================
+        function renderMessage(role, text, toolsUsed = null) {
             const chatDiv = document.getElementById('chat');
             const msgDiv = document.createElement('div');
             msgDiv.className = role;
 
-            // 将 [链接文本](url) 转换为 <a href="url">链接文本</a>
             let formattedText = text.replace(/\n/g, '<br>');
             formattedText = formattedText.replace(
                 /\[([^\]]+)\]\(([^)]+)\)/g,
                 function(match, linkText, url) {
-                    // 如果 URL 以 /reports/ 开头，拼接完整地址
                     if (url.startsWith('/reports/')) {
                         url = window.location.origin + url;
                     }
@@ -122,8 +249,109 @@
             chatDiv.scrollTop = chatDiv.scrollHeight;
         }
 
+        // ============================================================
+        // 审批列表刷新（手动）
+        // ============================================================
+        async function refreshApprovals() {
+            try {
+                const resp = await fetch('/approvals', {
+                    headers: { 'X-Tenant-ID': 'default' }
+                });
+                const data = await resp.json();
+                console.log('[DEBUG] /approvals 返回:', data);
+
+                document.getElementById('approval-badge').innerText = data.count || 0;
+
+                const listDiv = document.getElementById('approval-list');
+                if (data.items && data.items.length) {
+                    let html = '<ul>';
+                    data.items.forEach(item => {
+                        html += `
+                            <li>
+                                <strong>${item.id}</strong> ${item.title}
+                                <small>申请人：${item.requester}  ${item.created_at}</small>
+                            </li>
+                        `;
+                    });
+                    html += '</ul>';
+                    listDiv.innerHTML = html;
+                } else {
+                    listDiv.innerHTML = '<p class="empty">✅ 暂无待审批项</p>';
+                }
+            } catch (err) {
+                console.error('刷新审批列表失败:', err);
+                document.getElementById('approval-list').innerHTML = '<p class="empty">⚠️ 加载失败</p>';
+            }
+        }
+
+        // ============================================================
+        // 发送消息
+        // ============================================================
+        async function send() {
+            const input = document.getElementById('question');
+            const q = input.value.trim();
+            if (!q) return;
+            input.value = '';
+
+            const key = getCurrentConversationKey();
+            const conv = conversations[key];
+
+            renderMessage('user', q);
+            conv.push({ role: 'user', content: q, tools: null });
+
+            const thisRequestId = ++activeRequestId;
+
+            try {
+                let endpoint;
+                if (currentTab === 'approval') {
+                    endpoint = '/ask';
+                } else {
+                    endpoint = currentMode === 'quick' ? '/ask' : '/consult';
+                }
+
+                const resp = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: q,
+                        history: conv.slice(0, -1)
+                    })
+                });
+                const data = await resp.json();
+
+                if (thisRequestId !== activeRequestId) {
+                    console.log('丢弃过期响应，请求 ID:', thisRequestId);
+                    return;
+                }
+
+                const answer = data.result?.answer || '请求失败：请检查后端日志';
+                const toolsUsed = data.result?.tools_used || [];
+
+                renderMessage('assistant', answer, toolsUsed);
+                conv.push({ role: 'assistant', content: answer, tools: toolsUsed });
+
+                if (currentTab === 'approval') {
+                    setTimeout(refreshApprovals, 1000);
+                }
+            } catch (err) {
+                if (thisRequestId !== activeRequestId) return;
+                renderMessage('assistant', '请求失败：' + err.message);
+                conv.push({ role: 'assistant', content: '请求失败：' + err.message, tools: null });
+            }
+        }
+
+        // ============================================================
+        // 回车发送
+        // ============================================================
         document.getElementById('question').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') send();
+        });
+
+        // ============================================================
+        // 页面加载后初始化
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            switchTab('chat');
         });
     </script>
 </body>

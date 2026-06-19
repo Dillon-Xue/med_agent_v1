@@ -2,24 +2,25 @@ version: '3.8'
 
 services:
   mysql-patient:
-    image: mysql:8.0
-    container_name: mysql-patient
-    restart: always
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: your_strong_password
-      MYSQL_DATABASE: patient_db
-      MYSQL_USER: your_app_user
-      MYSQL_PASSWORD: your_app_password
-    volumes:
-      - mysql_patient_data:/var/lib/mysql
-    networks:
-      - med_agent_net
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      timeout: 10s
-      retries: 10
+      image: mysql:8.0
+      container_name: mysql-patient
+      restart: always
+      ports:
+        - "3306:3306"
+      environment:
+        MYSQL_ROOT_PASSWORD: your_strong_password
+        MYSQL_DATABASE: patient_db
+        MYSQL_USER: your_app_user
+        MYSQL_PASSWORD: your_app_password
+      volumes:
+        - mysql_patient_data:/var/lib/mysql
+        - ./init.sql:/docker-entrypoint-initdb.d/init.sql   # ← 新增
+      networks:
+        - med_agent_net
+      healthcheck:
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+        timeout: 10s
+        retries: 10
 
   medical-agent:
     build: .
@@ -38,6 +39,7 @@ services:
     volumes:
       - /mnt/d/A_Study/Agent/Med_Agent/vector_db:/app/vector_db
       - ./logs:/app/logs
+      - /mnt/d/A_Study/Agent/Med_Agent/reports:/app/reports
     depends_on:
       mysql-patient:
         condition: service_healthy

@@ -4,7 +4,6 @@ from datetime import datetime
 from docx import Document
 from utils.response import build_response
 
-
 class ReportTool:
     def __init__(self):
         self.template_path = "templates/登记表模板.docx"
@@ -85,6 +84,42 @@ class ReportTool:
         )
 
         download_url = f"/reports/{os.path.basename(output_path)}"
+
+        # ===== 🆕 自动创建审批项 =====
+        try:
+            from tools.approval_tool import ApprovalTool
+            from chat import current_session_user
+
+            approval_tool = ApprovalTool()
+            requester = current_session_user if current_session_user else "system"
+            reviewer = "doctor_张"
+
+            # 构建审批内容
+            content = f"""
+    患者姓名：{candidate['name']}
+    年龄：{info_dict.get('年龄', '未知')}
+    性别：{info_dict.get('性别', '未知')}
+    临床诊断：{info_dict.get('临床诊断', '无')}
+    目前用药：{info_dict.get('目前用药', '无')}
+
+    评估结果：{assessment.get('评估结果', '')}
+    用药目标：{assessment.get('用药目标', '')}
+    用药注意事项：{assessment.get('用药注意事项', '')}
+
+    评估表下载：{download_url}
+    """
+            approval_tool.create(
+                title=f"用药方案评估审批：{candidate['name']}",
+                content=content,
+                type="medication_evaluation",
+                requester=requester,
+                reviewer=reviewer
+            )
+            print(f"[ReportTool] 已自动创建审批项（审批人：{reviewer}）")
+        except Exception as e:
+            print(f"[ReportTool] 创建审批项失败: {e}")
+            # 不影响主流程，继续返回下载链接
+
         return build_response(
             answer=f"✅ 评估表已生成：{candidate['name']}\n📎 [下载评估表]({download_url})",
             source="report",

@@ -105,102 +105,74 @@ class PatientTool:
                     return {"action": "query", "name": name_match.group(1), "info": ""}
             return {"action": "unknown", "name": "", "info": ""}
 
-    def remember(self, name: str, info: str, append: bool = True) -> dict:
+    def remember(self, name: str, info: str, append: bool = False) -> dict:
+        print(f"[PatientTool.remember] 开始执行")
+        print(f"[PatientTool.remember] name: {name}")
+        print(f"[PatientTool.remember] info: {info}")
+        print(f"[PatientTool.remember] append: {append}")
+
         name = name.strip()
         info = info.strip()
-        # 检查姓名是否有效
-        if not name or name == "患者":
-            return build_response(
-                answer="❌ 无法提取患者姓名，请使用格式：记住患者 张三：信息",
-                source="patient",
-                success=False
-            )
 
         # 提取身份证号
-        id_match = re.search(r'身份证号?\s*[:：]?\s*(\d{17}[\dXx])', info)
+        id_match = re.search(r'(\d{17}[\dXx])', info)
         id_card = id_match.group(1) if id_match else None
+        print(f"[PatientTool.remember] 提取身份证号: {id_card}")
 
-        # 提取诊断（可选）
+        # 提取诊断
         diagnosis_match = re.search(r'(?:诊断|病情|疾病)[:：]?\s*(.+)', info)
         new_diagnosis = diagnosis_match.group(1) if diagnosis_match else None
+        print(f"[PatientTool.remember] 提取诊断: {new_diagnosis}")
 
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # 情况1：提供了身份证号
-        if id_card:
-            # 用身份证号查找
-            cursor.execute("SELECT info, diagnosis FROM patients WHERE id_card = %s", (id_card,))
-            existing = cursor.fetchone()
-            if existing:
-                # 找到了，更新该记录
-                existing_info, existing_diagnosis = existing
-                new_info = existing_info + f"\n\n[追加于 {time.strftime('%Y-%m-%d %H:%M:%S')}] {info}" if append else info
-                # 合并诊断
-                if new_diagnosis:
-                    merged_diagnosis = existing_diagnosis + "、" + new_diagnosis if existing_diagnosis else new_diagnosis
-                else:
-                    merged_diagnosis = existing_diagnosis
-                cursor.execute(
-                    "UPDATE patients SET info = %s, diagnosis = %s, updated_at = CURRENT_TIMESTAMP WHERE id_card = %s",
-                    (new_info, merged_diagnosis, id_card)
-                )
-                action = "更新"
+        # 用 name 查找
+        cursor.execute("SELECT info, diagnosis FROM patients WHERE name = %s", (name,))
+        existing = cursor.fetchone()
+        print(f"[PatientTool.remember] 查询已有记录: {existing}")
+
+        if existing:
+            existing_info, existing_diagnosis = existing
+            print(f"[PatientTool.remember] 已有记录，准备更新")
+            if append:
+                new_info = existing_info + f"\n\n[追加于 {time.strftime('%Y-%m-%d %H:%M:%S')}] {info}"
             else:
-                # 身份证号不存在，检查是否有同名记录
-                cursor.execute("SELECT info, diagnosis FROM patients WHERE name = %s", (name,))
-                existing = cursor.fetchone()
-                if existing:
-                    # 同名记录存在，更新该记录并补充身份证号
-                    existing_info, existing_diagnosis = existing
-                    new_info = existing_info + f"\n\n[追加于 {time.strftime('%Y-%m-%d %H:%M:%S')}] {info}" if append else info
-                    if new_diagnosis:
-                        merged_diagnosis = existing_diagnosis + "、" + new_diagnosis if existing_diagnosis else new_diagnosis
-                    else:
-                        merged_diagnosis = existing_diagnosis
-                    cursor.execute(
-                        "UPDATE patients SET info = %s, diagnosis = %s, id_card = %s, updated_at = CURRENT_TIMESTAMP WHERE name = %s",
-                        (new_info, merged_diagnosis, id_card, name)
-                    )
-                    action = "更新（补充身份证号）"
-                else:
-                    # 完全新患者，插入
-                    cursor.execute(
-                        "INSERT INTO patients (name, id_card, info, diagnosis) VALUES (%s, %s, %s, %s)",
-                        (name, id_card, info, new_diagnosis)
-                    )
-                    action = "新建"
+                new_info = info
+
+            if new_diagnosis:
+                merged_diagnosis = existing_diagnosis + "、" + new_diagnosis if existing_diagnosis else new_diagnosis
+            else:
+                merged_diagnosis = existing_diagnosis
+
+            if id_card:
+                sql = "UPDATE patients SET info = %s, diagnosis = %s, id_card = %s, updated_at = CURRENT_TIMESTAMP WHERE name = %s"
+                params = (new_info, merged_diagnosis, id_card, name)
+                print(f"[PatientTool.remember] 执行 UPDATE: {sql} {params}")
+                cursor.execute(sql, params)
+            else:
+                sql = "UPDATE patients SET info = %s, diagnosis = %s, updated_at = CURRENT_TIMESTAMP WHERE name = %s"
+                params = (new_info, merged_diagnosis, name)
+                print(f"[PatientTool.remember] 执行 UPDATE (无身份证号): {sql} {params}")
+                cursor.execute(sql, params)
+            action = "更新"
         else:
-            # 情况2：没有身份证号，只用姓名查找
-            cursor.execute("SELECT info, diagnosis FROM patients WHERE name = %s", (name,))
-            existing = cursor.fetchone()
-            if existing:
-                existing_info, existing_diagnosis = existing
-                new_info = existing_info + f"\n\n[追加于 {time.strftime('%Y-%m-%d %H:%M:%S')}] {info}" if append else info
-                if new_diagnosis:
-                    merged_diagnosis = existing_diagnosis + "、" + new_diagnosis if existing_diagnosis else new_diagnosis
-                else:
-                    merged_diagnosis = existing_diagnosis
-                cursor.execute(
-                    "UPDATE patients SET info = %s, diagnosis = %s, updated_at = CURRENT_TIMESTAMP WHERE name = %s",
-                    (new_info, merged_diagnosis, name)
-                )
-                action = "更新"
-            else:
-                cursor.execute(
-                    "INSERT INTO patients (name, id_card, info, diagnosis) VALUES (%s, %s, %s, %s)",
-                    (name, None, info, new_diagnosis)
-                )
-                action = "新建"
+            print(f"[PatientTool.remember] 无已有记录，准备插入")
+            sql = "INSERT INTO patients (name, id_card, info, diagnosis) VALUES (%s, %s, %s, %s)"
+            params = (name, id_card, info, new_diagnosis)
+            print(f"[PatientTool.remember] 执行 INSERT: {sql} {params}")
+            cursor.execute(sql, params)
+            action = "新建"
 
         conn.commit()
         conn.close()
-
+        print(f"[PatientTool.remember] 操作完成，action={action}")
         return build_response(
             answer=f"✅ 已{action}患者 {name} 的信息：{info}",
             source="patient",
             debug={"name": name, "id_card": id_card, "info": info, "diagnosis": new_diagnosis, "action": action}
         )
+
 
     def recall(self, name: str, id_card: str = None):
         name = name.strip()
@@ -265,7 +237,8 @@ class PatientTool:
                     source="patient",
                     success=False
                 )
-            return self.remember(name, info, append=True)
+            return self.remember(name, info, append=False)   # 记住：覆盖/新建，不追加
+
         elif action == "append":
             if not name or not info:
                 return build_response(
@@ -273,7 +246,8 @@ class PatientTool:
                     source="patient",
                     success=False
                 )
-            return self.remember(name, info, append=True)
+            return self.remember(name, info, append=True)    # 追加：保留原有信息，新增内容
+
         elif action == "query":
             if not name:
                 return build_response(

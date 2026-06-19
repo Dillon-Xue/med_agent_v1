@@ -222,7 +222,27 @@ class ConsultGraph:
 
     def _execute_tools(self, state: AgentState) -> AgentState:
         # 从历史中提取原始用药咨询问题
+        question = state["question"] 
+        patient_info = state.get("patient_info", {})
+        current_patient = state.get("current_patient", "")
         history = state.get("history", [])
+        parts = []
+        if patient_info.get("年龄"):
+            parts.append("年龄：" + patient_info["年龄"])
+        if patient_info.get("过敏史"):
+            parts.append("过敏史：" + patient_info["过敏史"])
+        if patient_info.get("用药史"):
+            parts.append("用药史：" + patient_info["用药史"])
+        if patient_info.get("全文档案"):
+            parts.append("既往档案：" + patient_info["全文档案"])
+        
+        if parts:
+            enhanced = "患者信息：" + "，".join(parts) + "。问题：" + question
+        else:
+            enhanced = question
+        
+        plan = self.planner.run(enhanced)  # 使用增强问题
+
         original_question = None
         for msg in history:
             if msg.get("role") == "user":
@@ -231,8 +251,6 @@ class ConsultGraph:
         if not original_question:
             original_question = state["question"]
 
-        patient_info = state.get("patient_info", {})
-        current_patient = state.get("current_patient", "")
 
         if current_patient and not patient_info.get("全文档案"):
             db_info = self._get_patient_info_from_db(current_patient)
@@ -276,32 +294,34 @@ class ConsultGraph:
         return state
 
     def _synthesize(self, state: AgentState) -> AgentState:
+        print(f"[ConsultGraph._synthesize] 开始执行")
         question = state["question"]
         results = state.get("tool_results", [])
         if not isinstance(results, list):
             results = []
         answer = self.synthesizer.run(question, results)
-
-        # 自动保存患者信息（追加模式）
+        print(f"[ConsultGraph._synthesize] 合成答案完成")
+        '''
         current_patient = state.get("current_patient")
         patient_info = state.get("patient_info", {})
         if current_patient and patient_info:
             info_parts = []
             if patient_info.get("年龄"):
-                info_parts.append(patient_info["年龄"])
+                info_parts.append(str(patient_info["年龄"]))
             if patient_info.get("过敏史"):
-                info_parts.append("过敏史：" + patient_info["过敏史"])
+                info_parts.append("过敏史：" + str(patient_info["过敏史"]))
             if patient_info.get("用药史"):
-                info_parts.append("用药史：" + patient_info["用药史"])
+                info_parts.append("用药史：" + str(patient_info["用药史"]))
             info_text = "，".join(info_parts)
             if info_text:
                 from tools.tool_registry import get_tools
                 tools = get_tools()
                 patient_tool = tools.get("patient")
                 if patient_tool:
-                    patient_tool.remember(current_patient, info_text, append=True)
-                    print(f"[ConsultGraph] 已追加患者 {current_patient} 的信息：{info_text}")
-
+                    patient_tool.remember(current_patient, info_text, append=False)
+                    print(f"[ConsultGraph] 已更新患者 {current_patient} 的档案：{info_text}")
+        '''
+        print(f"[ConsultGraph._synthesize] 自动保存已禁用，跳过")
         state["final_answer"] = answer
         return state
 

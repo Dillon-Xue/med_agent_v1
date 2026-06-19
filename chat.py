@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
 import re
@@ -9,40 +10,54 @@ import hashlib
 import time
 import logging
 from logging.handlers import RotatingFileHandler
+from contextvars import ContextVar
 
 from agents.planner import Planner
 from agents.executor import Executor
 from agents.synthesizer import Synthesizer
+from agents.consult_graph import ConsultGraph
 from tools.tool_registry import get_tools
 
-# 配置日志
+# =========================
+# 日志配置
+# =========================
 LOG_FILE = "logs/app.log"
 os.makedirs("logs", exist_ok=True)
 
 logger = logging.getLogger("med_agent")
 logger.setLevel(logging.INFO)
 
-# 控制台输出（保留）
+class TenantFilter(logging.Filter):
+    def filter(self, record):
+        try:
+            from chat import get_current_tenant
+            record.tenant_id = get_current_tenant()
+        except:
+            record.tenant_id = "default"
+        return True
+
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
-
-# 文件输出（带轮转）
 file_handler = RotatingFileHandler(
     LOG_FILE,
-    maxBytes=10*1024*1024,  # 10MB
-    backupCount=5           # 保留5个备份
+    maxBytes=10*1024*1024,
+    backupCount=5
 )
 file_handler.setLevel(logging.INFO)
 
 formatter = logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    '%(asctime)s - %(tenant_id)s - %(name)s - %(levelname)s - %(message)s'
 )
 console_handler.setFormatter(formatter)
 file_handler.setFormatter(formatter)
 
+logger.addFilter(TenantFilter())
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
+# =========================
+# FastAPI App
+# =========================
 app = FastAPI(title="医疗Agent API", description="基于RAG的多工具医学问答助手", version="1.0.0")
 
 app.add_middleware(
@@ -56,49 +71,47 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # =========================
-# Init Agent Components
+# 租户上下文
+# =========================
+tenant_id_var: ContextVar[str] = ContextVar("tenant_id", default="default")
+
+def get_current_tenant() -> str:
+    return tenant_id_var.get()
+
+@app.middleware("http")
+async def tenant_middleware(request: Request, call_next):
+    tenant_id = request.headers.get("X-Tenant-ID", "default")
+    token = tenant_id_var.set(tenant_id)
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        tenant_id_var.reset(token)
+
+# =========================
+# 全局用户状态（用于审批/患者操作）
+# =========================
+current_session_user = None
+
+# =========================
+# 组件初始化
 # =========================
 TOOLS = get_tools()
 planner = Planner()
 executor = Executor(TOOLS)
 synthesizer = Synthesizer(api_key=os.getenv("DASHSCOPE_API_KEY"))
+consult_graph = ConsultGraph()
 
 class ChatRequest(BaseModel):
     question: str
     history: list = []
 
 # =========================
-# 会话状态管理（多候选人选择）
-# =========================
-pending_selection = {}  # {session_id: {"candidates": [...], "action": "generate_report"}}
-current_patient = {}    # {session_id: "张三"}
-
-def get_session_id(request: Request) -> str:
-    """生成会话ID（基于IP + User-Agent）"""
-    client_ip = request.client.host if request.client else "unknown"
-    user_agent = request.headers.get("User-Agent", "")[:30]
-    return f"{client_ip}_{user_agent}"
-
-def set_current_patient(session_id: str, name: str):
-    """设置当前会话的操作患者"""
-    current_patient[session_id] = name
-
-def get_current_patient(session_id: str) -> str:
-    """获取当前会话的操作患者"""
-    return current_patient.get(session_id)
-
-def clear_current_patient(session_id: str):
-    """清除当前会话的操作患者"""
-    if session_id in current_patient:
-        del current_patient[session_id]
-
-# =========================
-# 简单内存缓存（带 TTL）
+# 缓存
 # =========================
 class SimpleCache:
     def __init__(self):
         self._cache = {}
-
     def get(self, key):
         if key in self._cache:
             entry = self._cache[key]
@@ -107,17 +120,14 @@ class SimpleCache:
             else:
                 del self._cache[key]
         return None
-
     def set(self, key, value, ttl=3600):
         self._cache[key] = {'value': value, 'time': time.time(), 'ttl': ttl}
-
     def clear(self):
         self._cache.clear()
 
 cache = SimpleCache()
 
 def should_cache(question: str, history: list) -> bool:
-    """判断当前问题是否适合缓存"""
     pronouns = ["它", "他", "她", "这个", "那个", "刚才", "上述", "以上", "以下"]
     if any(word in question for word in pronouns):
         logger.info(f"[Cache] 包含指代词，不缓存: {question}")
@@ -127,14 +137,13 @@ def should_cache(question: str, history: list) -> bool:
     return False
 
 def get_cache_key(question: str) -> str:
-    """缓存 key 只基于问题本身"""
     return hashlib.md5(question.encode()).hexdigest()
 
 # =========================
-# 核心问答逻辑（独立函数，用于缓存）
+# 核心问答逻辑
 # =========================
 async def process_question(question: str, history: list) -> dict:
-    """执行完整的问答流程，返回最终响应字典"""
+    """执行完整的问答流程（不含拦截）"""
     stripped = question.strip()
     greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "你好呀"]
     if stripped in greetings or stripped.lower() in greetings:
@@ -240,182 +249,178 @@ async def process_question(question: str, history: list) -> dict:
     }
 
 # =========================
-# API 端点
+# 快速问答端点 (/ask)
 # =========================
 @app.post("/v1/ask")
 @app.post("/ask")
 async def ask(req: ChatRequest, request: Request):
+    global current_session_user
     question = req.question.strip()
-    session_id = get_session_id(request)
+    history = req.history
 
-    # =========================
-    # 检查是否有待处理的多候选人选择
-    # =========================
-    if session_id in pending_selection:
-        selection = pending_selection[session_id]
-        candidates = selection.get("candidates", [])
+    # 1. 身份声明
+    if re.match(r'^用户[：:]', question):
+        user_match = re.search(r'用户[：:]\s*(\S+)', question)
+        if user_match:
+            current_session_user = user_match.group(1)
+            logger.info(f"[身份声明] 当前用户设置为: {current_session_user}")
+            return {
+                "success": True,
+                "result": {
+                    "answer": f"✅ 已识别当前用户：{current_session_user}",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
 
-        # 如果用户输入是数字
-        if question.isdigit():
-            idx = int(question) - 1
-            if 0 <= idx < len(candidates):
-                candidate = candidates[idx]
-                # 清理状态
-                del pending_selection[session_id]
-                # 使用选中的患者生成评估表
-                from tools.report_tool import ReportTool
-                report_tool = ReportTool()
-                result = report_tool._generate_from_candidate(candidate)
-                # 将结果包装成标准响应格式
-                return {
-                    "success": result.get("success", True),
-                    "result": {
-                        "answer": result.get("answer", ""),
-                        "tools_used": ["report"],
-                        "plan": {"question": question, "tools": ["report"]},
-                        "tool_results": []
-                    },
-                    "trace": {"executor": []}
-                }
-            else:
-                # 无效数字，重新显示候选列表
-                return {
-                    "success": False,
-                    "result": {
-                        "answer": f"❌ 无效选择，请输入 1-{len(candidates)} 之间的数字。",
-                        "tools_used": [],
-                        "plan": {"question": question, "tools": []},
-                        "tool_results": []
-                    },
-                    "trace": {"executor": []}
-                }
+    # 2. 审批指令拦截（不经过 process_question）
+    approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
+    if any(kw in question for kw in approval_keywords):
+        print(f"[Chat] 拦截到审批指令，直接处理: {question}")
+        from tools.approval_tool import ApprovalTool
+        approval_tool = ApprovalTool()
+        result = approval_tool.run(question)  # 传入原始问题，不带历史
+        return {
+            "success": True,
+            "result": {
+                "answer": result.get("answer", ""),
+                "tools_used": ["approval"],
+                "plan": {"question": question, "tools": ["approval"]},
+                "tool_results": [result]
+            },
+            "trace": {"executor": [result]}
+        }
 
-        # 如果用户输入包含姓名，尝试精确匹配
-        name_match = re.search(r'([\u4e00-\u9fa5]{2,4})', question)
+    # 3. 患者操作拦截
+    if re.search(r'记住患者|记录患者|追加患者|补充患者', question, re.IGNORECASE):
+        print(f"[Chat] 拦截到患者操作: {question}")
+        from tools.patient_tool import PatientTool
+        patient_tool = PatientTool()
+        # 直接解析
+        name_match = re.search(r'(?:记住患者|记录患者|追加患者|补充患者)\s*([\u4e00-\u9fa5]{2,4})\s*[:：]?\s*(.+)', question)
         if name_match:
             name = name_match.group(1)
-            for c in candidates:
-                if c.get("name") == name:
-                    # 精确匹配到姓名，使用该候选
-                    del pending_selection[session_id]
-                    from tools.report_tool import ReportTool
-                    report_tool = ReportTool()
-                    result = report_tool._generate_from_candidate(c)
-                    return {
-                        "success": result.get("success", True),
-                        "result": {
-                            "answer": result.get("answer", ""),
-                            "tools_used": ["report"],
-                            "plan": {"question": question, "tools": ["report"]},
-                            "tool_results": []
-                        },
-                        "trace": {"executor": []}
-                    }
+            info = name_match.group(2).strip()
+            result = patient_tool.remember(name, info, append=False)
+            return {
+                "success": True,
+                "result": {
+                    "answer": result.get("answer", ""),
+                    "tools_used": ["patient"],
+                    "plan": {"question": question, "tools": ["patient"]},
+                    "tool_results": [result]
+                },
+                "trace": {"executor": [result]}
+            }
+        else:
+            return {
+                "success": False,
+                "result": {
+                    "answer": "❌ 无法解析患者信息，请使用格式：记住患者 张三：60岁，男，肚子痛",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
 
-        # 如果用户输入的是身份证号，更新当前患者并生成
-        id_match = re.fullmatch(r'\s*(\d{17}[\dXx])\s*', question)
-        if id_match:
-            # 由 patient_tool 处理，继续正常流程
-            pass
-
-        # 如果用户输入其他内容，继续正常流程
-
-    # =========================
-    # 正常问答流程
-    # =========================
+    # 4. 正常问答（走缓存 + process_question）
     cache_key = get_cache_key(question)
-
-    if should_cache(question, req.history):
+    if should_cache(question, history):
         cached_result = cache.get(cache_key)
         if cached_result:
             logger.info(f"[Cache] 命中缓存，问题：{question}")
             return cached_result
         logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{question}")
-        result = await process_question(question, req.history)
+        result = await process_question(question, history)
         cache.set(cache_key, result, ttl=3600)
         return result
     else:
         logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{question}")
-        return await process_question(question, req.history)
+        return await process_question(question, history)
 
 # =========================
-# 健康检查
+# 智能问诊端点 (/consult)
 # =========================
-@app.get("/health")
-async def health_check():
-    return {"status": "ok"}
-
-# =========================
-# Prometheus 监控
-# =========================
-from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
-
-REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint'])
-REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint'])
-ERROR_COUNT = Counter('http_errors_total', 'Total HTTP errors', ['method', 'endpoint', 'status'])
-
-@app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    latency = time.time() - start_time
-    REQUEST_COUNT.labels(method=request.method, endpoint=request.url.path).inc()
-    REQUEST_LATENCY.labels(method=request.method, endpoint=request.url.path).observe(latency)
-    if response.status_code >= 400:
-        ERROR_COUNT.labels(method=request.method, endpoint=request.url.path, status=response.status_code).inc()
-    return response
-
-@app.get("/metrics")
-async def metrics():
-    return Response(generate_latest(REGISTRY), media_type="text/plain")
-
-# =========================
-# 报告下载接口
-# =========================
-from fastapi.responses import FileResponse
-@app.get("/reports/{filename}")
-async def download_report(filename: str):
-    file_path = f"reports/{filename}"
-    if not os.path.exists(file_path):
-        return {"error": "文件不存在"}
-    return FileResponse(
-        file_path,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=filename
-    )
-
-# =========================
-# LangGraph 问诊端点（V2）
-# =========================
-from agents.consult_graph import ConsultGraph
-
-consult_graph = ConsultGraph()
-
 @app.post("/consult")
 async def consult(req: ChatRequest):
-    """LangGraph 问诊端点（多轮交互）"""
-    question = req.question
+    global current_session_user
+    question = req.question.strip()
     history = req.history
 
-    answer = consult_graph.run(question, history)
+    # 身份声明
+    if re.match(r'^用户[：:]', question):
+        user_match = re.search(r'用户[：:]\s*(\S+)', question)
+        if user_match:
+            current_session_user = user_match.group(1)
+            logger.info(f"[Consult] 身份声明，当前用户设置为: {current_session_user}")
+            return {
+                "success": True,
+                "result": {
+                    "answer": f"✅ 已识别当前用户：{current_session_user}",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
 
-    return {
-        "success": True,
-        "result": {
-            "answer": answer,
-            "tools_used": [],
-            "plan": {"question": question, "mode": "consult"},
-            "tool_results": []
-        },
-        "trace": {"executor": []}
-    }
+    # 患者操作拦截
+    if re.search(r'记住患者|记录患者|追加患者|补充患者', question, re.IGNORECASE):
+        print(f"[Consult] 拦截到患者操作: {question}")
+        from tools.patient_tool import PatientTool
+        patient_tool = PatientTool()
+        name_match = re.search(r'(?:记住患者|记录患者|追加患者|补充患者)\s*([\u4e00-\u9fa5]{2,4})\s*[:：]?\s*(.+)', question)
+        if name_match:
+            name = name_match.group(1)
+            info = name_match.group(2).strip()
+            result = patient_tool.remember(name, info, append=False)
+            return {
+                "success": True,
+                "result": {
+                    "answer": result.get("answer", ""),
+                    "tools_used": ["patient"],
+                    "plan": {"question": question, "tools": ["patient"]},
+                    "tool_results": [result]
+                },
+                "trace": {"executor": [result]}
+            }
+        else:
+            return {
+                "success": False,
+                "result": {
+                    "answer": "❌ 无法解析患者信息，请使用格式：记住患者 张三：60岁，男，肚子痛",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
 
-@app.post("/consult")
-async def consult(req: ChatRequest):
+    # 审批指令拦截
+    approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
+    if any(kw in question for kw in approval_keywords):
+        print(f"[Consult] 拦截到审批指令: {question}")
+        from tools.approval_tool import ApprovalTool
+        approval_tool = ApprovalTool()
+        result = approval_tool.run(question)
+        return {
+            "success": True,
+            "result": {
+                "answer": result.get("answer", ""),
+                "tools_used": ["approval"],
+                "plan": {"question": question, "tools": ["approval"]},
+                "tool_results": [result]
+            },
+            "trace": {"executor": [result]}
+        }
+
+    # 正常进入 LangGraph 问诊
+    print(f"[Consult] 正常进入 LangGraph 问诊流程")
     try:
-        question = req.question
-        history = req.history
-        answer = await consult_graph.run(question, history)
+        answer = consult_graph.run(question, history)
         return {
             "success": True,
             "result": {
@@ -432,8 +437,87 @@ async def consult(req: ChatRequest):
             "result": {
                 "answer": f"问诊处理失败：{str(e)}",
                 "tools_used": [],
-                "plan": {"question": req.question, "mode": "consult"},
+                "plan": {"question": question, "mode": "consult"},
                 "tool_results": []
             },
             "trace": {"executor": []}
         }
+
+# =========================
+# 审批列表接口（用于前端侧边栏）
+# =========================
+@app.get("/approvals")
+async def get_approvals():
+    from tools.tool_registry import get_tools
+    from chat import current_session_user
+
+    print(f"[DEBUG] /approvals - current_session_user: {current_session_user}")
+    user = current_session_user if current_session_user else "current_user"
+    print(f"[DEBUG] /approvals - 查询用户: {user}")
+
+    tools = get_tools()
+    approval_tool = tools.get("approval")
+    if approval_tool:
+        items = approval_tool.list_pending_by_user(user)
+        print(f"[DEBUG] /approvals - 查询到 {len(items)} 条记录")
+        return {"count": len(items), "items": items}
+    return {"count": 0, "items": []}
+
+# =========================
+# 健康检查
+# =========================
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+# =========================
+# Prometheus 监控
+# =========================
+from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
+
+REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'tenant_id'])
+REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint', 'tenant_id'])
+ERROR_COUNT = Counter('http_errors_total', 'Total HTTP errors', ['method', 'endpoint', 'status', 'tenant_id'])
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    latency = time.time() - start_time
+    tenant_id = get_current_tenant()
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        tenant_id=tenant_id
+    ).inc()
+    REQUEST_LATENCY.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        tenant_id=tenant_id
+    ).observe(latency)
+    if response.status_code >= 400:
+        ERROR_COUNT.labels(
+            method=request.method,
+            endpoint=request.url.path,
+            status=response.status_code,
+            tenant_id=tenant_id
+        ).inc()
+    return response
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(REGISTRY), media_type="text/plain")
+
+# =========================
+# 报告下载
+# =========================
+@app.get("/reports/{filename}")
+async def download_report(filename: str):
+    file_path = f"reports/{filename}"
+    if not os.path.exists(file_path):
+        return {"error": "文件不存在"}
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=filename
+    )
