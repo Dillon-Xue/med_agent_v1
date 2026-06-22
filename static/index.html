@@ -186,6 +186,20 @@
 
     <script>
         // ============================================================
+        // 会话 ID 管理
+        // ============================================================
+        function getSessionId() {
+            let sessionId = localStorage.getItem('med_agent_session_id');
+            if (!sessionId) {
+                sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+                localStorage.setItem('med_agent_session_id', sessionId);
+            }
+            return sessionId;
+        }
+
+        const SESSION_ID = getSessionId();
+        console.log('[Session] ID:', SESSION_ID);
+        // ============================================================
         // 全局状态
         // ============================================================
         let currentMode = 'quick';
@@ -359,6 +373,7 @@
 
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/upload');
+            xhr.setRequestHeader('X-Session-ID', SESSION_ID);
 
             xhr.upload.addEventListener('progress', function(e) {
                 if (e.lengthComputable) {
@@ -440,7 +455,10 @@
 
                 const resp = await fetch(endpoint, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json',
+                        'X-Session-ID': SESSION_ID,
+                        'X-Conversation-Type': convType
+                    },
                     body: JSON.stringify({
                         question: q,
                         history: conv.slice(0, -1)
@@ -480,8 +498,50 @@
         // 页面加载后初始化
         // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
-            switchTab('chat');
+        // 先切换到 chat tab（默认）
+        switchTab('chat');
+        // 加载历史记录
+        loadHistory();
+    });
+
+    async function loadHistory() {
+        try {
+            const resp = await fetch(`/history?session_id=${SESSION_ID}&limit=50`);
+            const data = await resp.json();
+            if (data.success && data.items.length > 0) {
+                // 按 tab 分类恢复对话
+                data.items.forEach(item => {
+                    const key = item.conversation_type === 'quick' ? 'chat_quick' : 
+                            item.conversation_type === 'consult' ? 'chat_consult' : 'approval';
+                    if (!conversations[key]) {
+                        conversations[key] = [];
+                    }
+                    // 只恢复 user 和 assistant 消息，不恢复 system 消息
+                    if (item.role === 'user' || item.role === 'assistant') {
+                        conversations[key].push({
+                            role: item.role,
+                            content: item.content,
+                            tools: item.tools_used || null
+                        });
+                    }
+                });
+                // 刷新当前聊天界面
+                refreshCurrentChat();
+            }
+        } catch (err) {
+            console.error('加载历史记录失败:', err);
+        }
+    }
+
+    function refreshCurrentChat() {
+        const chatDiv = document.getElementById('chat');
+        chatDiv.innerHTML = '';
+        const key = getCurrentConversationKey();
+        const saved = conversations[key] || [];
+        saved.forEach(msg => {
+            renderMessage(msg.role, msg.content, msg.tools || null);
         });
+    }
     </script>
 </body>
 </html>

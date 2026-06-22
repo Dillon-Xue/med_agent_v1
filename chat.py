@@ -3,12 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import os
-import re
-import json
-import hashlib
-import time
-import logging
+import os, re, json, hashlib, time, logging, pymysql
 from logging.handlers import RotatingFileHandler
 from contextvars import ContextVar
 from typing import List, Optional
@@ -95,6 +90,20 @@ class UploadResponse(BaseModel):
     preview: str          # 前 200 字符预览
     source: str
     error: Optional[str] = None
+
+class HistoryItem(BaseModel):
+    id: int
+    role: str
+    content: str
+    tools_used: Optional[List[str]] = None
+    file_name: Optional[str] = None
+    conversation_type: str
+    created_at: str
+
+class HistoryResponse(BaseModel):
+    success: bool
+    items: List[HistoryItem]
+    count: int
 
 # =========================
 # FastAPI App
@@ -301,6 +310,37 @@ async def process_question(question: str, history: list) -> dict:
         "trace": {"executor": tool_results}
     }
 
+
+def save_conversation(session_id: str, role: str, content: str, 
+                      tools_used: list = None, file_name: str = None,
+                      conversation_type: str = "quick", tenant_id: str = None):
+    """保存单条对话记录到 conversations 表"""
+    try:
+        conn = pymysql.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "root"),
+            password=os.getenv("DB_PASSWORD", "yourpassword"),
+            database=os.getenv("DB_NAME", "patient_db"),
+            charset='utf8mb4'
+        )
+        cursor = conn.cursor()
+        
+        tools_json = json.dumps(tools_used) if tools_used else None
+        if tenant_id is None:
+            tenant_id = get_current_tenant()
+        
+        cursor.execute(
+            """INSERT INTO conversations 
+               (session_id, tenant_id, role, content, tools_used, file_name, conversation_type) 
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (session_id, tenant_id, role, content, tools_json, file_name, conversation_type)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"保存对话历史失败: {e}")
+
+
 # =========================
 # 快速问答端点 (/ask)
 # =========================
@@ -344,9 +384,29 @@ async def ask(req: ChatRequest, request: Request):
     approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
     if any(kw in question for kw in approval_keywords):
         print(f"[Chat] 拦截到审批指令，直接处理: {question}")
+
+        # 获取会话信息
+        session_id = request.headers.get("X-Session-ID")
+        conv_type = request.headers.get("X-Conversation-Type", "unknown")
+        print(f"[Chat] 审批拦截 - session_id: {session_id}, conv_type: {conv_type}")
+
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
         result = approval_tool.run(question)  # 传入原始问题，不带历史
+    # 🆕 保存审批助手的对话记录
+        if session_id:
+            print("[Chat] 审批拦截 - 开始保存对话")
+            try:
+                save_conversation(session_id, "user", question,
+                                conversation_type="approval")
+                answer = result.get("answer", "")
+                save_conversation(session_id, "assistant", answer,
+                                conversation_type="approval")
+                print("[Chat] 审批拦截 - 保存完成")
+            except Exception as e:
+                print(f"[Chat] 审批拦截 - 保存失败: {e}")
+        else:
+            print("[Chat] 审批拦截 - session_id 为空，跳过保存")
         return {
             "success": True,
             "result": {
@@ -401,6 +461,19 @@ async def ask(req: ChatRequest, request: Request):
         logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{question}")
         result = await process_question(question, history)
         cache.set(cache_key, result, ttl=3600)
+        # 🆕 自动保存（前提是前端传入了 session_id）
+        session_id = request.headers.get("X-Session-ID")
+        conv_type = request.headers.get("X-Conversation-Type", "quick")
+        if session_id and result.get("success"):
+            # 保存用户问题
+            save_conversation(session_id, "user", question, 
+                            conversation_type=conv_type)
+            # 保存助手回答
+            answer = result.get("result", {}).get("answer", "")
+            tools_used = result.get("result", {}).get("tools_used", [])
+            save_conversation(session_id, "assistant", answer, 
+                            tools_used=tools_used,
+                            conversation_type=conv_type)
         return result
     else:
         logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{question}")
@@ -416,7 +489,7 @@ async def ask(req: ChatRequest, request: Request):
     description="基于 LangGraph 的多轮交互式问诊。Agent 会主动追问缺失信息（年龄、过敏史、用药史），收集完整后给出个性化用药建议。",
     response_model=AskResponse
 )
-async def consult(req: ChatRequest):
+async def consult(req: ChatRequest, request: Request):
     global current_session_user
     question = req.question.strip()
     history = req.history
@@ -477,6 +550,16 @@ async def consult(req: ChatRequest):
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
         result = approval_tool.run(question)
+
+        # 🆕 保存审批助手的对话记录
+        session_id = request.headers.get("X-Session-ID")
+        if session_id:
+            save_conversation(session_id, "user", question,
+                            conversation_type="approval")
+            answer = result.get("answer", "")
+            save_conversation(session_id, "assistant", answer,
+                            conversation_type="approval")
+
         return {
             "success": True,
             "result": {
@@ -492,6 +575,14 @@ async def consult(req: ChatRequest):
     print(f"[Consult] 正常进入 LangGraph 问诊流程")
     try:
         answer = consult_graph.run(question, history)
+        session_id = request.headers.get("X-Session-ID")
+        if session_id:
+            # 保存用户问题
+            save_conversation(session_id, "user", question, 
+                            conversation_type="consult")
+            # 保存助手回答
+            save_conversation(session_id, "assistant", answer, 
+                            conversation_type="consult")
         return {
             "success": True,
             "result": {
@@ -678,3 +769,62 @@ async def upload_file(
         preview=preview,
         source="file"
     )
+
+@app.get(
+    "/history",
+    tags=["会话"],
+    summary="获取会话历史",
+    description="根据 session_id 拉取最近 50 条对话记录，用于刷新页面后恢复聊天上下文",
+    response_model=HistoryResponse
+)
+async def get_history(session_id: str, limit: int = 50, conversation_type: str = None):
+    """
+    获取指定会话的历史记录
+    
+    - **session_id**: 会话标识（前端生成，存储在 localStorage）
+    - **limit**: 返回条数，默认 50
+    - **conversation_type**: 可选过滤（quick / consult / approval）
+    """
+    try:
+        conn = pymysql.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "root"),
+            password=os.getenv("DB_PASSWORD", "yourpassword"),
+            database=os.getenv("DB_NAME", "patient_db"),
+            charset='utf8mb4'
+        )
+        cursor = conn.cursor()
+        
+        sql = """SELECT id, role, content, tools_used, file_name, conversation_type, created_at 
+                 FROM conversations 
+                 WHERE session_id = %s AND tenant_id = %s"""
+        params = [session_id, get_current_tenant()]
+        
+        if conversation_type:
+            sql += " AND conversation_type = %s"
+            params.append(conversation_type)
+        
+        sql += " ORDER BY created_at ASC LIMIT %s"
+        params.append(limit)
+        
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        conn.close()
+        
+        items = []
+        for row in rows:
+            tools = json.loads(row[3]) if row[3] else []
+            items.append({
+                "id": row[0],
+                "role": row[1],
+                "content": row[2],
+                "tools_used": tools,
+                "file_name": row[4],
+                "conversation_type": row[5],
+                "created_at": row[6].strftime("%Y-%m-%d %H:%M:%S") if row[6] else ""
+            })
+        
+        return {"success": True, "items": items, "count": len(items)}
+    except Exception as e:
+        logger.error(f"获取会话历史失败: {e}")
+        return {"success": False, "items": [], "count": 0, "error": str(e)}
