@@ -77,7 +77,8 @@
             background: #fafafa;
             border-radius: 8px;
             margin-bottom: 10px;
-            min-height: 300px;
+            height: 500px;
+            max-height: calc(100vh - 300px);
         }
         .user { text-align: right; color: #1a73e8; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
         .assistant { text-align: left; color: #2e7d32; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
@@ -101,6 +102,37 @@
         #approval-list .empty { color: #888; text-align: center; padding: 20px 0; }
         #approval-list .refresh-btn { margin-top: 10px; width: 100%; padding: 8px; background: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; }
         #approval-list .refresh-btn:hover { background: #ddd; }
+
+        /* 上传进度条 */
+        .upload-progress {
+            display: none;
+            margin: 10px 0;
+            padding: 12px 16px;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }
+        .upload-progress.active {
+            display: block;
+        }
+        .upload-progress .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        .upload-progress .progress-bar .fill {
+            height: 100%;
+            width: 0%;
+            background: #1a73e8;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+        .upload-progress .progress-text {
+            font-size: 13px;
+            color: #555;
+        }
     </style>
 </head>
 <body>
@@ -133,12 +165,23 @@
                 <button id="mode-consult" class="mode-btn" onclick="setMode('consult')">🩺 智能问诊</button>
             </div>
             <div id="chat"></div>
+
+            <!-- 上传进度条 -->
+            <div class="upload-progress" id="uploadProgress">
+                <div class="progress-text" id="progressText">📤 正在上传...</div>
+                <div class="progress-bar">
+                    <div class="fill" id="progressFill"></div>
+                </div>
+            </div>
+
             <div class="input-area">
+                <!-- 文件上传按钮 -->
+                <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.pdf,.docx,.xlsx" style="display:none;">
+                <button onclick="document.getElementById('fileInput').click()" style="padding:10px 16px; background:#1a73e8; color:#ffffff; border:none; border-radius:6px; cursor:pointer; font-weight:500; white-space:nowrap;">📎 上传文件</button>
                 <input type="text" id="question" placeholder="输入医学问题..." />
                 <button onclick="send()">发送</button>
             </div>
         </div>
-
     </div>
 
     <script>
@@ -212,7 +255,6 @@
             const modeSelector = document.querySelector('.mode-selector');
             if (tab === 'approval') {
                 modeSelector.style.display = 'none';
-                // 手动刷新一次，不启动定时器
                 refreshApprovals();
             } else {
                 modeSelector.style.display = 'flex';
@@ -283,6 +325,93 @@
                 document.getElementById('approval-list').innerHTML = '<p class="empty">⚠️ 加载失败</p>';
             }
         }
+
+        // ============================================================
+        // 文件上传逻辑（专用于智能问诊）
+        // ============================================================
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = this.files[0];
+            if (!file) return;
+
+            const validExtensions = ['.png', '.jpg', '.jpeg', '.pdf', '.docx', '.xlsx'];
+            const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+            if (!validExtensions.includes(fileExt)) {
+                alert('仅支持 PNG、JPG、PDF、DOCX、XLSX 格式');
+                this.value = '';
+                return;
+            }
+
+            const progressContainer = document.getElementById('uploadProgress');
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            progressContainer.classList.add('active');
+            progressFill.style.width = '0%';
+            progressText.textContent = '📤 正在上传文件...';
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('module', 'consult');
+
+            renderMessage('user', `📎 上传文件：${file.name}`);
+            const key = getCurrentConversationKey();
+            const conv = conversations[key];
+            conv.push({ role: 'user', content: `上传文件：${file.name}`, tools: null });
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload');
+
+            xhr.upload.addEventListener('progress', function(e) {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    progressFill.style.width = percent + '%';
+                    progressText.textContent = `📤 上传中... ${percent}%`;
+                    if (percent === 100) {
+                        progressText.textContent = '⏳ 正在解析文件内容...';
+                    }
+                }
+            });
+
+            xhr.onload = function() {
+                progressContainer.classList.remove('active');
+                if (xhr.status === 200) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        if (data.success) {
+                            const content = data.content;
+                            const systemMsg = `【文件内容】\n${content}`;
+                            const preview = content.substring(0, 200) + (content.length > 200 ? '...' : '');
+                            renderMessage('assistant', `📄 已解析文件 ${file.name}，识别内容如下：\n\n${preview}\n\n（可继续提问）`);
+                            conv.push({ role: 'system', content: systemMsg, tools: null });
+                        } else {
+                            renderMessage('assistant', `❌ 文件解析失败：${data.error || '未知错误'}`);
+                            conv.push({ role: 'assistant', content: `文件解析失败：${data.error || '未知错误'}`, tools: null });
+                        }
+                    } catch (err) {
+                        renderMessage('assistant', `❌ 解析响应失败：${err.message}`);
+                        conv.push({ role: 'assistant', content: `解析响应失败：${err.message}`, tools: null });
+                    }
+                } else {
+                    renderMessage('assistant', `❌ 上传失败 (HTTP ${xhr.status})`);
+                    conv.push({ role: 'assistant', content: `上传失败 (HTTP ${xhr.status})`, tools: null });
+                }
+            };
+
+            xhr.onerror = function() {
+                progressContainer.classList.remove('active');
+                renderMessage('assistant', '❌ 网络错误，请检查服务是否运行');
+                conv.push({ role: 'assistant', content: '网络错误，请检查服务是否运行', tools: null });
+            };
+
+            xhr.ontimeout = function() {
+                progressContainer.classList.remove('active');
+                renderMessage('assistant', '❌ 上传超时，请重试');
+                conv.push({ role: 'assistant', content: '上传超时，请重试', tools: null });
+            };
+
+            xhr.timeout = 60000;
+            xhr.send(formData);
+            this.value = '';
+        });
 
         // ============================================================
         // 发送消息

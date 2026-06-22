@@ -78,7 +78,13 @@ class ApprovalTool:
         rows = cursor.fetchall()
         conn.close()
         print(f"[ApprovalTool.list_pending_by_user] 查询到 {len(rows)} 条记录")
-        return [{"id": row[0], "title": row[1], "requester": row[2], "created_at": row[3]} for row in rows]
+        # 将 created_at 转换为字符串格式
+        return [{
+            "id": row[0],
+            "title": row[1],
+            "requester": row[2],
+            "created_at": row[3].strftime("%Y-%m-%d %H:%M:%S") if row[3] else ""
+        } for row in rows]
 
     def list_pending(self, query: str = "") -> dict:
         user = self._get_current_user(query)

@@ -10,22 +10,51 @@ class ReportTool:
         self.output_dir = "reports/"
         os.makedirs(self.output_dir, exist_ok=True)
 
+    def _log(self, msg):
+        print(f"[ReportTool] {msg}")
+
     def run(self, query: str) -> dict:
         """统一入口：生成评估表"""
         clean_query = re.sub(r'^对话历史：.*?当前问题：', '', query)
+
+        # ---- 优先从 query 中提取患者姓名 ----
+        patient_name = None
+        
+        # 1. 提取“生成评估表 张三”或“张三 生成评估表”格式
         match = re.search(r'(?:生成评估表|生成病历|生成档案|生成记录)\s*([\u4e00-\u9fa5]{2,4})', clean_query)
         if not match:
+            match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*(?:生成评估表|生成病历|生成档案|生成记录)', clean_query)
+        if not match:
             match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:评估表|病历|档案)', clean_query)
-        if not match:
-            match = re.search(r'([\u4e00-\u9fa5]{2,4})', clean_query)
-        if not match:
+        if match:
+            patient_name = match.group(1)
+            print(f"[ReportTool] 从 query 提取患者姓名: {patient_name}")
+
+        # ---- 如果 query 中没有，再尝试从全局会话获取（兜底） ----
+        if not patient_name:
+            try:
+                import chat
+                if hasattr(chat, 'current_session_user') and chat.current_session_user:
+                    patient_name = chat.current_session_user
+                    print(f"[ReportTool] 从会话兜底获取患者姓名: {patient_name}")
+            except Exception as e:
+                print(f"[ReportTool] 会话兜底失败: {e}")
+
+        # ---- 如果提取到的姓名是无效值，过滤掉 ----
+        invalid_names = ["患者信息", "患者", "信息", "评估表", "生成评估表", "生成报告", "生成档案", "生成病历"]
+        if patient_name in invalid_names:
+            print(f"[ReportTool] 提取到无效姓名 '{patient_name}'，设为空")
+            patient_name = None
+
+        # ---- 如果还是没有，返回错误 ----
+        if not patient_name:
             return build_response(
                 answer="❌ 请指定患者姓名，例如：生成评估表 张三",
                 source="report",
                 success=False
             )
-        patient_name = match.group(1)
 
+        # ---- 查询患者档案 ----
         from tools.tool_registry import get_tools
         tools = get_tools()
         patient_tool = tools.get("patient")
@@ -175,6 +204,10 @@ class ReportTool:
         return ""
 
     def _parse_patient_info(self, text: str, diagnosis: str = "") -> dict:
+        self._log(f"【DEBUG report】_parse_patient_info 被调用")
+        self._log(f"【DEBUG report】输入 text 长度: {len(text)}")
+        self._log(f"【DEBUG report】输入 text 内容:\n{text[:500]}")
+        
         info = {
             "姓名": "",
             "性别": "",
@@ -186,73 +219,118 @@ class ReportTool:
             "主要问题": "",
         }
 
-        # 1. 提取性别
-        gender_match = re.search(r'(男|女|男性|女性)', text)
-        if gender_match:
-            info["性别"] = "男" if gender_match.group(1) in ["男", "男性"] else "女"
+        # 从表格格式提取
+        lines = text.strip().split('\n')
+        header_line = None
+        data_line = None
+        
+        self._log(f"【DEBUG report】开始表格解析，共 {len(lines)} 行")
+        for i, line in enumerate(lines):
+            if '|' in line:
+                parts = [p.strip() for p in line.split('|') if p.strip()]
+                self._log(f"【DEBUG report】第 {i} 行包含 |，parts: {parts}")
+                if any(kw in line for kw in ['姓名', '性别', '年龄', '家庭住址']):
+                    header_line = parts
+                    self._log(f"【DEBUG report】识别为表头: {header_line}")
+                    if i + 1 < len(lines):
+                        next_parts = [p.strip() for p in lines[i + 1].split('|') if p.strip()]
+                        self._log(f"【DEBUG report】下一行数据: {next_parts}")
+                        if len(next_parts) >= len(header_line) - 1:
+                            data_line = next_parts
+                            self._log(f"【DEBUG report】成功提取数据行: {data_line}")
+                    break
+        
+        if header_line and data_line:
+            self._log(f"【DEBUG report】开始按表头提取字段")
+            for idx, field in enumerate(header_line):
+                if idx < len(data_line):
+                    value = data_line[idx]
+                    self._log(f"【DEBUG report】字段 '{field}' -> 值 '{value}'")
+                    if '性别' in field and value in ['男', '女', '男性', '女性']:
+                        info["性别"] = '男' if value in ['男', '男性'] else '女'
+                        self._log(f"【DEBUG report】提取到性别: {info['性别']}")
+                    elif '年龄' in field:
+                        if value and value.isdigit():
+                            info["年龄"] = value + "岁"
+                        else:
+                            info["年龄"] = value
+                        self._log(f"【DEBUG report】提取到年龄: {info['年龄']}")
+                    elif '家庭住址' in field:
+                        info["家庭住址"] = value
+                        self._log(f"【DEBUG report】提取到家庭住址: {info['家庭住址']}")
+                    elif '联系方式' in field:
+                        info["联系方式"] = value
+                        self._log(f"【DEBUG report】提取到联系方式: {info['联系方式']}")
+                    elif '过敏史' in field:
+                        info["过敏史"] = value
+                        self._log(f"【DEBUG report】提取到过敏史: {info['过敏史']}")
+                    elif '服药' in field or '用药' in field:
+                        info["目前用药"] = value
+                        self._log(f"【DEBUG report】提取到目前用药: {info['目前用药']}")
+                    elif '症状' in field:
+                        info["临床诊断"] = value
+                        self._log(f"【DEBUG report】提取到临床诊断: {info['临床诊断']}")
+        else:
+            self._log(f"【DEBUG report】未检测到表格格式，header_line: {header_line}, data_line: {data_line}")
 
-        # 2. 提取年龄
-        age_match = re.search(r'(\d{1,3})\s*(?:岁|周岁|年)', text)
-        if age_match:
-            info["年龄"] = age_match.group(1) + "岁"
+        # 如果表格提取失败，降级到正则
+        self._log(f"【DEBUG report】开始正则降级提取")
+        
+        if not info["性别"]:
+            gender_match = re.search(r'性别[：:]\s*([男女])', text)
+            self._log(f"【DEBUG report】正则提取性别结果: {gender_match.group(1) if gender_match else None}")
+            if gender_match:
+                info["性别"] = gender_match.group(1)
 
-        # 3. 提取手机号
-        phone_match = re.search(r'(1[3-9]\d{9})', text)
-        if phone_match:
-            info["联系方式"] = phone_match.group(1)
+        if not info["年龄"]:
+            age_match = re.search(r'年龄[：:]\s*(\d{1,3})\s*岁?', text)
+            self._log(f"【DEBUG report】正则提取年龄结果: {age_match.group(1) if age_match else None}")
+            if age_match:
+                info["年龄"] = age_match.group(1) + "岁"
 
-        # 4. 提取住址
-        city_match = re.search(r'([\u4e00-\u9fa5]{2,6}市)', text)
-        if city_match:
-            info["家庭住址"] = city_match.group(1)
+        if not info["联系方式"]:
+            phone_match = re.search(r'联系方式[：:]\s*(1[3-9]\d{9})', text)
+            if not phone_match:
+                phone_match = re.search(r'(1[3-9]\d{9})', text)
+            self._log(f"【DEBUG report】正则提取联系方式结果: {phone_match.group(1) if phone_match else None}")
+            if phone_match:
+                info["联系方式"] = phone_match.group(1)
 
-        # 5. 提取用药（包括“喝了咳嗽糖浆”等）
-        med_patterns = [
-            r'(?:喝了|吃了|服用|用了|打过|输过)\s*([^，,。；;.、]+)',
-            r'用药\s*[:：]?\s*([^，,。；;.]+)',
-        ]
-        for pattern in med_patterns:
-            med_match = re.search(pattern, text)
-            if med_match:
-                info["目前用药"] = med_match.group(1).strip()
-                break
+        if not info["家庭住址"]:
+            # 只匹配到 , ， 。；;、 或下一个字段名之前
+            address_match = re.search(r'家庭住址[：:]\s*([^，,。；;、]+(?:省|市|区|县|镇|乡|村|路|街|号|幢|栋|单元|室|层|楼)[^，,。；;、]*)', text)
+            self._log(f"【DEBUG report】正则提取家庭住址结果: {address_match.group(1).strip() if address_match else None}")
+            if address_match:
+                info["家庭住址"] = address_match.group(1).strip()
+            else:
+                # 兜底：匹配 "家住XXX" 格式
+                address_match = re.search(r'家住\s*([\u4e00-\u9fa5]+(?:省|市|区))', text)
+                self._log(f"【DEBUG report】兜底提取家庭住址结果: {address_match.group(1).strip() if address_match else None}")
+                if address_match:
+                    info["家庭住址"] = address_match.group(1).strip()
 
         if not info["目前用药"]:
-            no_med_patterns = [
-                r'没有吃\s*药', r'未\s*用药', r'不\s*吃药', r'无\s*用药', r'没\s*吃药',
-                r'暂未\s*用药', r'暂未\s*吃药', r'尚未\s*用药', r'尚未\s*吃药',
-                r'未服\s*药', r'未\s*服药', r'没\s*服\s*药'
-            ]
-            for pattern in no_med_patterns:
-                if re.search(pattern, text):
-                    info["目前用药"] = "无"
-                    break
+            med_match = re.search(r'用药史[：:]\s*([^，,。；;.]+)', text)
+            self._log(f"【DEBUG report】正则提取用药史结果: {med_match.group(1).strip() if med_match else None}")
+            if med_match:
+                info["目前用药"] = med_match.group(1).strip()
+            else:
+                med_match = re.search(r'当前服药情况[：:]\s*([^，,。；;.]+)', text)
+                self._log(f"【DEBUG report】正则提取当前服药情况结果: {med_match.group(1).strip() if med_match else None}")
+                if med_match:
+                    info["目前用药"] = med_match.group(1).strip()
 
-        # 6. 提取诊断（如果未提供）
-        if not info["临床诊断"]:
-            diag_match = re.search(r'(?:诊断|病情|疾病|症状)\s*[:：]?\s*([^，,。；;.]+)', text)
+        # 诊断
+        if not info["临床诊断"] or info["临床诊断"] in ["", "感冒"]:
+            diag_match = re.search(r'症状[：:]\s*([^，,。；;.]+)', text)
+            self._log(f"【DEBUG report】正则提取症状结果: {diag_match.group(1).strip() if diag_match else None}")
             if diag_match:
                 info["临床诊断"] = diag_match.group(1).strip()
-            else:
-                symptom_list = ["失眠", "头痛", "发烧", "发热", "咳嗽", "感冒", "高血压", "糖尿病",
-                                "心脏病", "胃痛", "腹痛", "腹泻", "恶心", "呕吐", "头晕", "乏力",
-                                "胸闷", "气短", "心悸", "焦虑", "抑郁", "多梦", "耳鸣"]
-                for symptom in symptom_list:
-                    if symptom in text:
-                        if info["临床诊断"]:
-                            info["临床诊断"] += "、" + symptom
-                        else:
-                            info["临床诊断"] = symptom
-                        if not info["主要问题"]:
-                            info["主要问题"] = symptom
-                        break
 
-        if not info["主要问题"] and info["临床诊断"]:
-            info["主要问题"] = info["临床诊断"].split("、")[0] if "、" in info["临床诊断"] else info["临床诊断"]
+        if info["临床诊断"] and not info["主要问题"]:
+            info["主要问题"] = info["临床诊断"]
 
-        if not info["临床诊断"]:
-            info["临床诊断"] = "待进一步检查明确"
-
+        self._log(f"【DEBUG report】最终返回的 info: {info}")
         return info
 
     def _generate_assessment(self, name: str, info: dict, drug_suggestion: str) -> dict:

@@ -56,77 +56,182 @@ class ConsultGraph:
             print("[DEBUG]", *args, **kwargs)
 
     def _extract_info_from_text(self, text: str) -> dict:
-        """使用 LLM 从文本中提取结构化患者信息"""
-        # 检查是否为询问
-        inquiry_patterns = [
-            r'可以\s*(吃|服用|用)\s*([\u4e00-\u9fa5]{2,})',
-            r'能\s*(吃|服用|用)\s*([\u4e00-\u9fa5]{2,})',
-            r'可\s*以\s*(吃|服用|用)\s*([\u4e00-\u9fa5]{2,})'
-        ]
-        is_inquiry = any(re.search(p, text) for p in inquiry_patterns)
-
+        """使用 LLM 从文本中提取结构化患者信息，并用正则做补充提取"""
+        # 初始化结果（包含新增字段）
+        result = {
+            "姓名": None, "年龄": None, "过敏史": None, "用药史": None, "id_card": None,
+            "性别": None, "家庭住址": None, "联系方式": None
+        }
+        
         try:
             prompt = f"""
-    请从以下用户输入中提取患者的健康信息，返回 JSON 格式。
-    输入：{text}
+请从以下用户输入中提取患者的健康信息，返回 JSON 格式。
+输入：{text}
 
-    需要提取的字段：
-    - name: 患者姓名（如果有“我是XX”或“我叫XX”则提取，否则为 null）
-    - age: 年龄（如“30岁”，如果没有则为 null）
-    - allergy: 过敏史（如果有过敏信息，提取具体过敏原，如“西红柿”；如果明确说“无过敏”则为“无”；如果没有提及则为 null）
-    - medication: 当前正在服用的药物（如果用户明确说“在服用XX”，提取药物名称；如果明确说“未服药”则为“无”；如果没有提及则为 null）
+需要提取的字段：
+- name: 患者姓名（如果有“我是XX”或“我叫XX”则提取，否则为 null）
+- age: 年龄（如“30岁”，如果没有则为 null）
+- allergy: 过敏史（如果有过敏信息，提取具体过敏原，如“西红柿”；如果明确说“无过敏”则为“无”；如果没有提及则为 null）
+- medication: 当前正在服用的药物（如果用户明确说“在服用XX”，提取药物名称；如果明确说“未服药”则为“无”；如果没有提及则为 null）
+- id_card: 身份证号（如果提到身份证号/身份证/ID，提取18位数字，否则为 null）
+- gender: 性别（男/女，如果没有则为 null）
+- address: 家庭住址（如果有具体地址，如“杭州市滨江区”，否则为 null）
+- phone: 联系方式（手机号，如“17688909987”，否则为 null）
 
-    重要规则：
-    1. 如果用户是在询问“可以吃XX吗？”、“能吃XX吗？”，这不算“正在服用”，medication 应为 null。
-    2. 如果用户说“在服用硝苯地平”，则 medication 为“硝苯地平”。
-    3. 如果用户说“80岁，无过敏史，在服用硝苯地平”，则 age 为“80岁”，allergy 为“无”，medication 为“硝苯地平”。
+重要规则：
+1. 输入可能包含表格格式（如“姓名 | 年龄 | 过敏史”），请正确识别对应字段的值。
+2. 如果字段显示为“无”、“未服药”、“未提及”、“null”等，请提取为“无”或 null。
 
-    只输出 JSON，不要其他内容。
-    """
+只输出 JSON，不要其他内容。
+"""
             resp = self.client.chat.completions.create(
                 model="qwen-plus",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
             content = resp.choices[0].message.content.strip()
-            # 提取 JSON 块
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0]
             data = json.loads(content)
-            return {
-                "姓名": data.get("name"),
-                "年龄": data.get("age"),
-                "过敏史": data.get("allergy"),
-                "用药史": data.get("medication")
-            }
+            
+            # 提取 LLM 结果，并统一转换为字符串
+            for key, val in {
+                "姓名": "name", "年龄": "age", "过敏史": "allergy",
+                "用药史": "medication", "id_card": "id_card",
+                "性别": "gender", "家庭住址": "address", "联系方式": "phone"
+            }.items():
+                raw = data.get(val)
+                result[key] = str(raw) if raw is not None else None
+            
+            print(f"[ConsultGraph] LLM 提取结果: {result}")
+            
         except Exception as e:
             print(f"[ConsultGraph] LLM 提取失败，降级到正则: {e}")
-            return self._extract_info_with_regex(text)
+        
+        # 正则补充提取（合并结果）
+        regex_result = self._extract_info_with_regex(text)
+        print(f"[ConsultGraph] 正则补充提取结果: {regex_result}")
+        
+        # 合并：如果 LLM 提取的字段为空，用正则的结果补充
+        for key in ["姓名", "年龄", "过敏史", "用药史", "id_card", "性别", "家庭住址", "联系方式"]:
+            if not result.get(key) and regex_result.get(key):
+                result[key] = regex_result[key]
+        
+        print(f"[ConsultGraph] 最终提取结果: {result}")
+        return result
 
     def _extract_info_with_regex(self, text: str) -> dict:
-        """降级方案：使用正则提取"""
-        info = {"姓名": None, "年龄": None, "过敏史": None, "用药史": None}
-        # 姓名
-        name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', text)
-        if name_match:
-            info["姓名"] = name_match.group(1)
-        # 年龄
-        age_match = re.search(r'(\d{1,3})\s*岁', text)
-        if age_match:
-            info["年龄"] = age_match.group(1) + "岁"
-        # 过敏史
-        if "过敏" in text:
-            if re.search(r'(无|没有|否认)\s*过敏', text):
-                info["过敏史"] = "无"
-            else:
-                info["过敏史"] = "有过敏史"
-        # 用药史（简单处理）
-        if "服用" in text or "吃" in text:
-            drug_match = re.search(r'服用\s*([\u4e00-\u9fa5]{2,6})', text)
+        """降级方案：使用正则提取（支持表格格式）"""
+        print(f"[DEBUG] _extract_info_with_regex 被调用，text 长度: {len(text)}")
+        print(f"[DEBUG] text 内容:\n{text[:500]}")
+        info = {
+            "姓名": None, "年龄": None, "过敏史": None, "用药史": None, "id_card": None,
+            "性别": None, "家庭住址": None, "联系方式": None
+        }
+
+        # ===== 首先尝试从表格格式中提取 =====
+        lines = text.strip().split('\n')
+        header_row = None
+        data_row = None
+
+        for i, line in enumerate(lines):
+            if '|' in line:
+                parts = [p.strip() for p in line.split('|') if p.strip()]
+                if any(kw in line for kw in ['姓名', '年龄', '过敏史', '身份证', '用药', '服药', '症状', '性别', '住址', '地址', '联系方式', '电话']):
+                    header_row = parts
+                    if i + 1 < len(lines):
+                        next_parts = [p.strip() for p in lines[i + 1].split('|') if p.strip()]
+                        if len(next_parts) >= len(header_row) - 1:
+                            data_row = next_parts
+                    break
+
+        if header_row and data_row:
+            for idx, field in enumerate(header_row):
+                if idx < len(data_row):
+                    value = data_row[idx]
+                    if '姓名' in field and not info["姓名"]:
+                        info["姓名"] = value
+                    elif '年龄' in field and not info["年龄"]:
+                        info["年龄"] = value
+                    elif '过敏' in field and not info["过敏史"]:
+                        info["过敏史"] = value
+                    elif '身份证' in field and not info["id_card"]:
+                        info["id_card"] = value
+                    elif '用药' in field or '服药' in field:
+                        if not info["用药史"]:
+                            info["用药史"] = value
+                    elif '性别' in field and not info["性别"]:
+                        info["性别"] = value
+                    elif '家庭住址' in field or '地址' in field:
+                        if not info["家庭住址"]:
+                            info["家庭住址"] = value
+                    elif '联系方式' in field or '电话' in field:
+                        if not info["联系方式"]:
+                            info["联系方式"] = value
+
+        # ===== 如果表格提取失败，回退到原有正则逻辑 =====
+        if not info["姓名"]:
+            name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', text)
+            if name_match:
+                info["姓名"] = name_match.group(1)
+
+        if not info["年龄"]:
+            age_match = re.search(r'(\d{1,3})\s*岁', text)
+            if age_match:
+                info["年龄"] = age_match.group(1) + "岁"
+
+        if not info["过敏史"]:
+            if "过敏" in text:
+                if re.search(r'(无|没有|否认)\s*过敏', text):
+                    info["过敏史"] = "无"
+                else:
+                    allergy_match = re.search(r'对\s*([\u4e00-\u9fa5]{2,6})\s*过敏', text)
+                    if allergy_match:
+                        info["过敏史"] = "对" + allergy_match.group(1) + "过敏"
+                    else:
+                        info["过敏史"] = "有过敏史"
+
+        if not info["用药史"] and ("服用" in text or "吃" in text or "服药" in text):
+            drug_match = re.search(r'(?:服用|吃|服药)\s*([\u4e00-\u9fa5]{2,6})', text)
             if drug_match:
                 info["用药史"] = drug_match.group(1)
+
+        if not info["id_card"]:
+            id_match = re.search(r'(\d{17}[\dXx])', text)
+            if id_match:
+                info["id_card"] = id_match.group(1)
+
+        if not info["性别"]:
+            gender_match = re.search(r'(?:性别|姓别)[:：]\s*([男女])', text)
+            if gender_match:
+                info["性别"] = gender_match.group(1)
+            else:
+                # 直接查找男/女
+                if re.search(r'\b男\b', text):
+                    info["性别"] = "男"
+                elif re.search(r'\b女\b', text):
+                    info["性别"] = "女"
+
+        if not info["家庭住址"]:
+            address_match = re.search(r'(?:家庭住址|住址|地址)[:：]\s*([^\n,，]+)', text)
+            if address_match:
+                info["家庭住址"] = address_match.group(1).strip()
+            else:
+                address_match = re.search(r'家住\s*([\u4e00-\u9fa5]+(?:省|市|区))', text)
+                if address_match:
+                    info["家庭住址"] = address_match.group(1).strip()
+
+        if not info["联系方式"]:
+            phone_match = re.search(r'(?:联系方式|电话|手机)[:：]\s*(1[3-9]\d{9})', text)
+            if phone_match:
+                info["联系方式"] = phone_match.group(1)
+            else:
+                phone_match = re.search(r'(1[3-9]\d{9})', text)
+                if phone_match:
+                    info["联系方式"] = phone_match.group(1)
+
         return info
 
     def _get_patient_info_from_db(self, name: str) -> dict:
@@ -149,36 +254,31 @@ class ConsultGraph:
         patient_info = state.get("patient_info", {})
         current_patient = state.get("current_patient", "")
 
-        # 从 history 中提取姓名
         all_user_text = ""
         for msg in history:
             if msg.get("role") == "user":
+                all_user_text += " " + msg.get("content", "")
+            if msg.get("role") == "system" and "【文件内容】" in msg.get("content", ""):
                 all_user_text += " " + msg.get("content", "")
         name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
         if name_match:
             current_patient = name_match.group(1)
 
-        # 如果 patient_info 为空，从数据库加载
         if current_patient and not patient_info:
             db_info = self._get_patient_info_from_db(current_patient)
             if db_info:
-                for key in ["年龄", "过敏史", "用药史"]:
+                for key in ["年龄", "过敏史", "用药史", "性别", "家庭住址", "联系方式"]:
                     if db_info.get(key):
                         patient_info[key] = db_info[key]
                 if db_info.get("全文档案"):
                     patient_info["全文档案"] = db_info["全文档案"]
 
-        # 从历史中提取新信息
         extracted = self._extract_info_from_text(all_user_text)
         self._log("从历史提取的新信息:", extracted)
-        if extracted.get("年龄"):
-            patient_info["年龄"] = extracted["年龄"]
-        if extracted.get("过敏史"):
-            patient_info["过敏史"] = extracted["过敏史"]
-        if extracted.get("用药史"):
-            patient_info["用药史"] = extracted["用药史"]
+        for key in ["年龄", "过敏史", "用药史", "性别", "家庭住址", "联系方式"]:
+            if extracted.get(key):
+                patient_info[key] = extracted[key]
 
-        # 确定缺失信息
         missing = []
         if "年龄" not in patient_info:
             missing.append("年龄")
@@ -221,41 +321,9 @@ class ConsultGraph:
         return state
 
     def _execute_tools(self, state: AgentState) -> AgentState:
-        # 从历史中提取原始用药咨询问题
-        question = state["question"] 
+        original_question = state["question"]
         patient_info = state.get("patient_info", {})
         current_patient = state.get("current_patient", "")
-        history = state.get("history", [])
-        parts = []
-        if patient_info.get("年龄"):
-            parts.append("年龄：" + patient_info["年龄"])
-        if patient_info.get("过敏史"):
-            parts.append("过敏史：" + patient_info["过敏史"])
-        if patient_info.get("用药史"):
-            parts.append("用药史：" + patient_info["用药史"])
-        if patient_info.get("全文档案"):
-            parts.append("既往档案：" + patient_info["全文档案"])
-        
-        if parts:
-            enhanced = "患者信息：" + "，".join(parts) + "。问题：" + question
-        else:
-            enhanced = question
-        
-        plan = self.planner.run(enhanced)  # 使用增强问题
-
-        original_question = None
-        for msg in history:
-            if msg.get("role") == "user":
-                original_question = msg.get("content")
-                break
-        if not original_question:
-            original_question = state["question"]
-
-
-        if current_patient and not patient_info.get("全文档案"):
-            db_info = self._get_patient_info_from_db(current_patient)
-            if db_info.get("全文档案"):
-                patient_info["全文档案"] = db_info["全文档案"]
 
         parts = []
         if patient_info.get("年龄"):
@@ -264,25 +332,41 @@ class ConsultGraph:
             parts.append("过敏史：" + patient_info["过敏史"])
         if patient_info.get("用药史"):
             parts.append("用药史：" + patient_info["用药史"])
+        if patient_info.get("性别"):
+            parts.append("性别：" + patient_info["性别"])
+        if patient_info.get("家庭住址"):
+            parts.append("家庭住址：" + patient_info["家庭住址"])
+        if patient_info.get("联系方式"):
+            parts.append("联系方式：" + patient_info["联系方式"])
         if patient_info.get("全文档案"):
             parts.append("既往档案：" + patient_info["全文档案"])
-
+        
         info_str = "，".join(parts) if parts else ""
         enhanced = "患者信息：" + info_str + "。问题：" + original_question if parts else original_question
 
         plan = self.planner.run(enhanced)
         tool_list = plan.get("tools", ["drug", "guideline", "literature", "risk"])
-        # 移除 patient 工具，避免干扰
         tool_list = [t for t in tool_list if t != "patient"]
 
-        # 执行工具（异步）
+        if "report" in tool_list and current_patient:
+            import re
+            kw_match = re.search(r'(生成评估表|生成报告|生成档案|生成病历)', original_question)
+            if kw_match:
+                keyword = kw_match.group(1)
+                tool_question = f"{keyword} {current_patient}"
+            else:
+                tool_question = f"{original_question} {current_patient}"
+            print(f"[ConsultGraph] 为 report 工具构建专用问题: {tool_question}")
+        else:
+            tool_question = enhanced
+
         try:
             loop = asyncio.get_running_loop()
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.executor.run(tool_list, enhanced))
+                future = pool.submit(asyncio.run, self.executor.run(tool_list, tool_question))
                 results = future.result()
         except RuntimeError:
-            results = asyncio.run(self.executor.run(tool_list, enhanced))
+            results = asyncio.run(self.executor.run(tool_list, tool_question))
         except Exception as e:
             print("[ConsultGraph] 执行工具出错:", e)
             results = []
@@ -294,42 +378,109 @@ class ConsultGraph:
         return state
 
     def _synthesize(self, state: AgentState) -> AgentState:
-        print(f"[ConsultGraph._synthesize] 开始执行")
+        current_patient = state.get("current_patient", "")
         question = state["question"]
+        
+        if current_patient and current_patient not in question:
+            if "生成评估表" in question:
+                question = f"生成评估表 {current_patient}"
+            elif "生成报告" in question:
+                question = f"生成报告 {current_patient}"
+            elif "生成档案" in question:
+                question = f"生成档案 {current_patient}"
+            elif "生成病历" in question:
+                question = f"生成病历 {current_patient}"
+            else:
+                question = f"{current_patient} {question}"
+            print(f"[ConsultGraph] 已将患者姓名拼接到问题: {question}")
+
+        if current_patient:
+            try:
+                import chat
+                chat.current_session_user = current_patient
+                print(f"[ConsultGraph] 已同步患者姓名到会话: {current_patient}")
+            except Exception as e:
+                print(f"[ConsultGraph] 同步患者姓名失败: {e}")
+
+        print(f"[ConsultGraph._synthesize] 开始执行")
         results = state.get("tool_results", [])
         if not isinstance(results, list):
             results = []
+
         answer = self.synthesizer.run(question, results)
         print(f"[ConsultGraph._synthesize] 合成答案完成")
-        '''
-        current_patient = state.get("current_patient")
-        patient_info = state.get("patient_info", {})
-        if current_patient and patient_info:
-            info_parts = []
-            if patient_info.get("年龄"):
-                info_parts.append(str(patient_info["年龄"]))
-            if patient_info.get("过敏史"):
-                info_parts.append("过敏史：" + str(patient_info["过敏史"]))
-            if patient_info.get("用药史"):
-                info_parts.append("用药史：" + str(patient_info["用药史"]))
-            info_text = "，".join(info_parts)
-            if info_text:
-                from tools.tool_registry import get_tools
-                tools = get_tools()
-                patient_tool = tools.get("patient")
-                if patient_tool:
-                    patient_tool.remember(current_patient, info_text, append=False)
-                    print(f"[ConsultGraph] 已更新患者 {current_patient} 的档案：{info_text}")
-        '''
-        print(f"[ConsultGraph._synthesize] 自动保存已禁用，跳过")
+
         state["final_answer"] = answer
         return state
 
     def run(self, question: str, history: list = None) -> str:
         self._log("========== run 开始 ==========")
+        patient_info = {}
+        file_extracted_name = None
+        file_content = ""
+
+        if history:
+            for msg in history:
+                if msg.get("role") == "system":
+                    content_part = msg.get("content", "")
+                    if "【文件内容】" in content_part or "文件内容" in content_part:
+                        if "【文件内容】" in content_part:
+                            file_content = content_part.split("【文件内容】")[1].strip()
+                        else:
+                            file_content = content_part.strip()
+                        self._log("检测到文件内容，准备提取患者信息...")
+                        break
+
+        if file_content:
+            self._log("检测到文件内容，开始自动提取患者信息...")
+            extracted = self._extract_info_from_text(file_content)
+            self._log(f"【DEBUG】_extract_info_from_text 返回: {extracted}")
+            
+            if extracted.get("姓名"):
+                name = extracted["姓名"]
+                file_extracted_name = name
+                info_parts = []
+                
+                # 使用 extracted 中的字段（已包含性别、地址、电话）
+                if extracted.get("性别"):
+                    info_parts.append(f"性别：{extracted['性别']}")
+                if extracted.get("年龄"):
+                    info_parts.append(f"年龄：{extracted['年龄']}岁")
+                if extracted.get("家庭住址"):
+                    info_parts.append(f"家庭住址：{extracted['家庭住址']}")
+                if extracted.get("联系方式"):
+                    info_parts.append(f"联系方式：{extracted['联系方式']}")
+                if extracted.get("过敏史"):
+                    info_parts.append(f"过敏史：{extracted['过敏史']}")
+                if extracted.get("用药史"):
+                    info_parts.append(f"用药史：{extracted['用药史']}")
+                if extracted.get("id_card"):
+                    info_parts.append(f"身份证号：{extracted['id_card']}")
+                
+                self._log(f"【DEBUG】最终 info_parts: {info_parts}")
+                
+                if info_parts:
+                    from tools.tool_registry import get_tools
+                    tools = get_tools()
+                    patient_tool = tools.get("patient")
+                    if patient_tool:
+                        info_str = "，".join(info_parts)
+                        self._log(f"【DEBUG】保存到数据库的 info 字符串: {info_str}")
+                        patient_tool.remember(file_extracted_name, info_str, append=False, id_card=extracted.get("id_card"))
+                        self._log(f"已自动保存患者 {file_extracted_name} 的档案：{info_parts}")
+                    
+                    # 更新 patient_info（用于后续）
+                    for key in ["年龄", "过敏史", "用药史", "性别", "家庭住址", "联系方式", "id_card"]:
+                        if extracted.get(key):
+                            # 注意：id_card 存为身份证号
+                            if key == "id_card":
+                                patient_info["身份证号"] = extracted[key]
+                            else:
+                                patient_info[key] = extracted[key]
+                    self._log("从文件内容提取到患者信息:", patient_info)
+
         self._log("问题:", question)
         self._log("历史:", history)
-
         all_user_text = ""
         for msg in (history or []):
             if msg.get("role") == "user":
@@ -339,13 +490,15 @@ class ConsultGraph:
 
         name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
         name = name_match.group(1) if name_match else None
-        self._log("提取姓名:", name)
+        if not name and file_extracted_name:
+            name = file_extracted_name
+            self._log("使用从文件内容提取的姓名:", name)
 
-        patient_info = {}
+        self._log("提取姓名:", name)
         if name:
             db_info = self._get_patient_info_from_db(name)
             if db_info:
-                for key in ["年龄", "过敏史", "用药史"]:
+                for key in ["年龄", "过敏史", "用药史", "性别", "家庭住址", "联系方式"]:
                     if db_info.get(key):
                         patient_info[key] = db_info[key]
                 if db_info.get("全文档案"):
@@ -353,12 +506,9 @@ class ConsultGraph:
                 self._log("从数据库加载档案:", patient_info)
 
         extracted = self._extract_info_from_text(all_user_text)
-        if extracted.get("年龄"):
-            patient_info["年龄"] = extracted["年龄"]
-        if extracted.get("过敏史"):
-            patient_info["过敏史"] = extracted["过敏史"]
-        if extracted.get("用药史"):
-            patient_info["用药史"] = extracted["用药史"]
+        for key in ["年龄", "过敏史", "用药史", "性别", "家庭住址", "联系方式"]:
+            if extracted.get(key):
+                patient_info[key] = extracted[key]
 
         missing = []
         if "年龄" not in patient_info:

@@ -12,7 +12,6 @@ import logging
 from logging.handlers import RotatingFileHandler
 from contextvars import ContextVar
 from typing import List, Optional
-
 from agents.planner import Planner
 from agents.executor import Executor
 from agents.synthesizer import Synthesizer
@@ -88,6 +87,14 @@ class ApprovalItem(BaseModel):
 class ApprovalsResponse(BaseModel):
     count: int
     items: List[ApprovalItem]
+
+class UploadResponse(BaseModel):
+    success: bool
+    filename: str
+    content: str
+    preview: str          # 前 200 字符预览
+    source: str
+    error: Optional[str] = None
 
 # =========================
 # FastAPI App
@@ -609,4 +616,65 @@ async def download_report(filename: str):
         file_path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=filename
+    )
+
+
+from fastapi import File, UploadFile, Form
+from typing import Optional
+from tools.file_tool import FileTool
+
+# 在 app 初始化后，初始化 FileTool
+file_tool = FileTool(api_key=os.getenv("DASHSCOPE_API_KEY"))
+
+@app.post(
+    "/upload",
+    tags=["文件"],
+    summary="上传并解析文件（图片/PDF）",
+    description="上传图片或 PDF 文件，系统自动识别并提取其中的医疗信息（患者姓名、年龄、诊断、药品等），返回纯文本内容供后续对话使用。",
+    response_model=UploadResponse
+)
+async def upload_file(
+    file: UploadFile = File(..., description="支持 PNG、JPG、PDF 格式，最大 10MB"),
+    module: str = Form("consult", description="调用模块：quick | consult | approval")
+):
+    """
+    上传文件并解析内容
+    
+    - **图片 (PNG/JPG)**：调用 Qwen-VL 多模态模型识别文字和医疗信息
+    - **PDF**：提取全文文本，自动截断超长内容
+    """
+    # 1. 文件大小校验（10MB）
+    content_bytes = await file.read()
+    if len(content_bytes) > 10 * 1024 * 1024:
+        return UploadResponse(
+            success=False,
+            filename=file.filename,
+            content="",
+            preview="",
+            source="file",
+            error="文件大小超过 10MB 限制"
+        )
+    
+    # 2. 调用 FileTool 解析
+    result = file_tool.run(content_bytes, file.filename, module)
+    
+    if not result.get("success"):
+        return UploadResponse(
+            success=False,
+            filename=file.filename,
+            content="",
+            preview="",
+            source="file",
+            error=result.get("answer", "解析失败")
+        )
+    
+    content = result.get("answer", "")
+    preview = content[:200] + ("..." if len(content) > 200 else "")
+    
+    return UploadResponse(
+        success=True,
+        filename=file.filename,
+        content=content,
+        preview=preview,
+        source="file"
     )

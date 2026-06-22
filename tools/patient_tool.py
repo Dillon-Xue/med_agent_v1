@@ -105,19 +105,21 @@ class PatientTool:
                     return {"action": "query", "name": name_match.group(1), "info": ""}
             return {"action": "unknown", "name": "", "info": ""}
 
-    def remember(self, name: str, info: str, append: bool = False) -> dict:
+    def remember(self, name: str, info: str, append: bool = False, id_card: str = None) -> dict:
         print(f"[PatientTool.remember] 开始执行")
         print(f"[PatientTool.remember] name: {name}")
         print(f"[PatientTool.remember] info: {info}")
         print(f"[PatientTool.remember] append: {append}")
+        print(f"[PatientTool.remember] id_card: {id_card}")
 
         name = name.strip()
         info = info.strip()
 
-        # 提取身份证号
-        id_match = re.search(r'(\d{17}[\dXx])', info)
-        id_card = id_match.group(1) if id_match else None
-        print(f"[PatientTool.remember] 提取身份证号: {id_card}")
+        # 如果调用方没有传入 id_card，尝试从 info 中提取
+        if not id_card:
+            id_match = re.search(r'(\d{17}[\dXx])', info)
+            id_card = id_match.group(1) if id_match else None
+        print(f"[PatientTool.remember] 最终身份证号: {id_card}")
 
         # 提取诊断
         diagnosis_match = re.search(r'(?:诊断|病情|疾病)[:：]?\s*(.+)', info)

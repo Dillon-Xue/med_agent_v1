@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from tools.approval_tool import ApprovalTool
 load_dotenv()
+from tools.file_tool import FileTool
 
 BASE_DIR = os.getenv("MED_AGENT_ROOT", os.getcwd())
 
@@ -34,6 +35,7 @@ def init_tools():
         "patient": PatientTool(),   # 无需额外参数，从环境变量读取配置
         "report": ReportTool(),
         "approval": ApprovalTool(),
+        "file": FileTool(api_key),
     }
 
     print("\n========== TOOL INIT OK ==========")
