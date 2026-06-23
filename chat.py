@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import os, re, json, hashlib, time, logging, pymysql
+import os, re, json, hashlib, time, logging, pymysql, asyncio, httpx, requests
 from logging.handlers import RotatingFileHandler
 from contextvars import ContextVar
 from typing import List, Optional
@@ -12,6 +12,11 @@ from agents.executor import Executor
 from agents.synthesizer import Synthesizer
 from agents.consult_graph import ConsultGraph
 from tools.tool_registry import get_tools
+# =========================
+# Trace 存储（内存）
+# =========================
+trace_store = {}
+trace_lock = asyncio.Lock()
 
 # =========================
 # 日志配置
@@ -204,7 +209,8 @@ def get_cache_key(question: str) -> str:
 # =========================
 # 核心问答逻辑
 # =========================
-async def process_question(question: str, history: list) -> dict:
+async def process_question(question: str, history: list, trace_callback=None) -> dict:
+    print(f"[process_question] 收到的 trace_callback 是否为 None: {trace_callback is None}")
     """执行完整的问答流程（不含拦截）"""
     stripped = question.strip()
     greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "你好呀"]
@@ -288,16 +294,16 @@ async def process_question(question: str, history: list) -> dict:
         final_augmented = augmented_question
 
     # 调用 Planner
-    plan = planner.run(question)
+    plan = planner.run(question, trace_callback=trace_callback)
     tool_list = plan.get("tools", [])
     if not tool_list:
         tool_list = ["drug", "guideline", "literature", "risk"]
 
     # 异步执行工具
-    tool_results = await executor.run(tool_list, final_augmented)
+    tool_results = await executor.run(tool_list, final_augmented, trace_callback=trace_callback)
 
     # 合成答案
-    final_answer = synthesizer.run(final_augmented, tool_results)
+    final_answer = synthesizer.run(final_augmented, tool_results, trace_callback=trace_callback)
 
     return {
         "success": True,
@@ -359,10 +365,13 @@ def save_conversation(session_id: str, role: str, content: str,
     response_model=AskResponse
 )
 async def ask(req: ChatRequest, request: Request):
+    print(f"[ASK] ==== 请求开始 ====")
+    print(f"[ASK] 所有 headers: {request.headers}")
+    print(f"[ASK] X-Trace-ID: {request.headers.get('X-Trace-ID')}")
     global current_session_user
     question = req.question.strip()
     history = req.history
-
+    session_id = request.headers.get("X-Session-ID")
     # 1. 身份声明
     if re.match(r'^用户[：:]', question):
         user_match = re.search(r'用户[：:]\s*(\S+)', question)
@@ -393,7 +402,7 @@ async def ask(req: ChatRequest, request: Request):
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
         result = approval_tool.run(question)  # 传入原始问题，不带历史
-    # 🆕 保存审批助手的对话记录
+        # 🆕 保存审批助手的对话记录
         if session_id:
             print("[Chat] 审批拦截 - 开始保存对话")
             try:
@@ -451,33 +460,82 @@ async def ask(req: ChatRequest, request: Request):
                 "trace": {"executor": []}
             }
 
-    # 4. 正常问答（走缓存 + process_question）
+    # 4. 正常问答（走缓存 + process_question） 
     cache_key = get_cache_key(question)
+    trace_id = request.headers.get("X-Trace-ID") or request.headers.get("x-trace-id")  # 前端生成的 trace_session_id
+    print(f"[Trace] 收到 trace_id: {trace_id}")
+    
+    # 🆕 定义 trace_callback 函数
+    def trace_callback(step_type: str, data: dict):
+        print(f"[Trace] 收到 step: {step_type}, data: {data}")
+        if not trace_id:
+            return
+        try:
+            print(f"[Trace] 正在记录 step: {step_type}")
+            if trace_id in trace_store:
+                trace_store[trace_id]["steps"].append({
+                    "step_type": step_type,
+                    "timestamp": time.time(),
+                    "data": data
+                })
+            print(f"[Trace] step 记录完成: {step_type}")
+        except Exception as e:
+            print(f"[Trace] 回调失败: {e}")
+
+    # 🆕 启动 trace
+    if trace_id:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "http://localhost:8000/trace/start",
+                    json={"session_id": trace_id, "question": question},
+                    timeout=2.0
+                )
+            print(f"[Trace] 启动成功: {trace_id}")
+        except Exception as e:
+            print(f"[Trace] 启动失败: {e}")
+
+    # ===== 执行问答，获取 result =====
+    result = None
+    
     if should_cache(question, history):
         cached_result = cache.get(cache_key)
         if cached_result:
             logger.info(f"[Cache] 命中缓存，问题：{question}")
-            return cached_result
-        logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{question}")
-        result = await process_question(question, history)
-        cache.set(cache_key, result, ttl=3600)
-        # 🆕 自动保存（前提是前端传入了 session_id）
-        session_id = request.headers.get("X-Session-ID")
-        conv_type = request.headers.get("X-Conversation-Type", "quick")
-        if session_id and result.get("success"):
-            # 保存用户问题
-            save_conversation(session_id, "user", question, 
-                            conversation_type=conv_type)
-            # 保存助手回答
-            answer = result.get("result", {}).get("answer", "")
-            tools_used = result.get("result", {}).get("tools_used", [])
-            save_conversation(session_id, "assistant", answer, 
-                            tools_used=tools_used,
-                            conversation_type=conv_type)
-        return result
+            result = cached_result
+            # 🆕 缓存命中时也记录 trace（仅记录命中状态）
+            if trace_id:
+                try:
+                    if trace_id in trace_store:
+                        trace_store[trace_id]["steps"].append({
+                            "step_type": "cache",
+                            "timestamp": time.time(),
+                            "data": {"status": "hit", "question": question}
+                        })
+                except Exception as e:
+                    print(f"[Trace] 缓存命中记录失败: {e}")
+        else:
+            logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{question}")
+            result = await process_question(question, history, trace_callback=trace_callback if trace_id else None)
+            cache.set(cache_key, result, ttl=3600)
     else:
         logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{question}")
-        return await process_question(question, history)
+        result = await process_question(question, history, trace_callback=trace_callback if trace_id else None)
+
+    # ===== 🆕 统一保存历史记录（所有分支都执行） =====
+    session_id = request.headers.get("X-Session-ID")
+    conv_type = request.headers.get("X-Conversation-Type", "quick")
+    if session_id and result and result.get("success"):
+        try:
+            save_conversation(session_id, "user", question, conversation_type=conv_type)
+            answer = result.get("result", {}).get("answer", "")
+            tools_used = result.get("result", {}).get("tools_used", [])
+            save_conversation(session_id, "assistant", answer, tools_used=tools_used, conversation_type=conv_type)
+            logger.info(f"[历史记录] 已保存会话 {session_id}，类型：{conv_type}")
+        except Exception as e:
+            logger.error(f"[历史记录] 保存失败: {e}")
+
+    return result
 
 # =========================
 # 智能问诊端点 (/consult)
@@ -828,3 +886,67 @@ async def get_history(session_id: str, limit: int = 50, conversation_type: str =
     except Exception as e:
         logger.error(f"获取会话历史失败: {e}")
         return {"success": False, "items": [], "count": 0, "error": str(e)}
+# =========================
+# Trace 存储（内存，生产环境可改为 Redis）
+# =========================
+from pydantic import BaseModel
+
+class TraceStep(BaseModel):
+    step_type: str  # planner / executor / retriever / synthesizer
+    timestamp: float
+    data: dict
+
+class TraceData(BaseModel):
+    session_id: str
+    question: str
+    steps: List[TraceStep]
+    start_time: float
+    end_time: Optional[float] = None
+
+class TraceStartRequest(BaseModel):
+    session_id: str
+    question: str
+
+@app.post("/trace/start")
+async def start_trace(req: TraceStartRequest):
+    async with trace_lock:
+        trace_store[req.session_id] = {
+            "session_id": req.session_id,
+            "question": req.question,
+            "steps": [],
+            "start_time": time.time(),
+            "end_time": None
+        }
+    return {"status": "ok"}
+
+@app.post("/trace/step")
+async def add_trace_step(session_id: str, step_type: str, data: dict):
+    """添加一个追踪步骤"""
+    if session_id not in trace_store:
+        return {"status": "error", "message": "trace not found"}
+    
+    async with trace_lock:
+        trace_store[session_id]["steps"].append({
+            "step_type": step_type,
+            "timestamp": time.time(),
+            "data": data
+        })
+    return {"status": "ok"}
+
+@app.get("/trace/{session_id}")
+async def get_trace(session_id: str):
+    """获取完整的追踪链路"""
+    if session_id not in trace_store:
+        return {"success": False, "error": "trace not found"}
+    
+    trace = trace_store[session_id].copy()
+    trace["steps"] = trace["steps"]
+    return {"success": True, "data": trace}
+
+@app.delete("/trace/{session_id}")
+async def clear_trace(session_id: str):
+    """清除追踪数据"""
+    async with trace_lock:
+        if session_id in trace_store:
+            del trace_store[session_id]
+    return {"status": "ok"}

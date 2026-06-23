@@ -8,7 +8,16 @@ class Synthesizer:
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
 
-    def run(self, augmented_question, tool_results):
+    def run(self, augmented_question, tool_results, trace_callback=None):
+        # 🆕 记录 trace（开始合成）
+        if trace_callback:
+            print(f"[Synthesizer] 正在记录 trace")
+            trace_callback("synthesizer", {
+                "question": augmented_question,
+                "tool_count": len(tool_results),
+                "tool_sources": [r.get("source") for r in tool_results if r]
+            })
+
         # 优先检查 report 工具返回的信息（生成评估表）
         for res in tool_results:
             if not res or not isinstance(res, dict):
@@ -16,6 +25,12 @@ class Synthesizer:
             if res.get("source") == "report":
                 answer = res.get("answer", "")
                 if answer:
+                    if trace_callback:
+                        trace_callback("synthesizer", {
+                            "status": "complete",
+                            "answer_preview": answer[:300],
+                            "source": "report"
+                        })
                     return answer
                 
         # 优先检查 patient 工具返回的确认信息
@@ -25,13 +40,26 @@ class Synthesizer:
             if res.get("source") == "patient":
                 answer = res.get("answer", "")
                 if answer.startswith("✅") or answer.startswith("📋"):
+                    if trace_callback:
+                        trace_callback("synthesizer", {
+                            "status": "complete",
+                            "answer_preview": answer[:300],
+                            "source": "patient"
+                        })
                     return answer
 
         # 只有一个工具结果且是 patient 的直接返回
         if len(tool_results) == 1:
             res = tool_results[0]
             if res and isinstance(res, dict) and res.get("source") == "patient":
-                return res.get("answer", "患者工具未返回有效信息")
+                answer = res.get("answer", "患者工具未返回有效信息")
+                if trace_callback:
+                    trace_callback("synthesizer", {
+                        "status": "complete",
+                        "answer_preview": answer[:300],
+                        "source": "patient"
+                    })
+                return answer
 
         # 综合所有工具结果
         context_parts = []
@@ -45,7 +73,13 @@ class Synthesizer:
             context_parts.append(f"【来自 {source} 工具】\n{answer}")
 
         if not context_parts:
-            return "未找到相关信息，请尝试换一种问法。"
+            fallback_msg = "未找到相关信息，请尝试换一种问法。"
+            if trace_callback:
+                trace_callback("synthesizer", {
+                    "status": "complete",
+                    "answer_preview": fallback_msg[:300]
+                })
+            return fallback_msg
 
         combined = "\n\n".join(context_parts)
 
@@ -77,4 +111,14 @@ class Synthesizer:
             ],
             temperature=0.2
         )
-        return resp.choices[0].message.content
+
+        answer = resp.choices[0].message.content
+
+        # 🆕 记录合成结果（修复：在 answer 定义之后调用）
+        if trace_callback:
+            trace_callback("synthesizer", {
+                "status": "complete",
+                "answer_preview": answer[:300]
+            })
+        
+        return answer

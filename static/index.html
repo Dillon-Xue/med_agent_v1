@@ -133,6 +133,104 @@
             font-size: 13px;
             color: #555;
         }
+
+        /* ===== Trace 模态框 ===== */
+        .trace-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .trace-modal.active { display: flex; }
+        .trace-modal .modal-content {
+            background: #fff;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            border-radius: 12px;
+            padding: 24px;
+            overflow-y: auto;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        .trace-modal .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+        }
+        .trace-modal .modal-header h3 { margin: 0; }
+        .trace-modal .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #888;
+        }
+        .trace-modal .modal-close:hover { color: #333; }
+        .trace-step {
+            border-left: 3px solid #1a73e8;
+            padding-left: 16px;
+            margin-bottom: 16px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 12px 16px;
+        }
+        .trace-step .step-header {
+            font-weight: bold;
+            color: #1a73e8;
+            margin-bottom: 4px;
+        }
+        .trace-step .step-header .step-time {
+            font-weight: normal;
+            color: #888;
+            font-size: 12px;
+            margin-left: 8px;
+        }
+        .trace-step .step-detail {
+            font-size: 13px;
+            color: #333;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .trace-step .step-detail code {
+            background: #e8e8e8;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        .trace-step .step-detail .tool-list {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+        .trace-step .step-detail .tool-tag {
+            background: #e8f0fe;
+            color: #1a73e8;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        .trace-btn {
+            font-size: 12px;
+            color: #888;
+            background: none;
+            border: none;
+            cursor: pointer;
+            margin-top: 4px;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+        .trace-btn:hover {
+            background: #f0f0f0;
+            color: #1a73e8;
+        }
     </style>
 </head>
 <body>
@@ -184,6 +282,19 @@
         </div>
     </div>
 
+    <!-- ===== Trace 模态框（移到聊天区外部） ===== -->
+    <div class="trace-modal" id="traceModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🔍 推理过程</h3>
+                <button class="modal-close" onclick="closeTrace()">&times;</button>
+            </div>
+            <div id="traceBody">
+                <p style="color:#888;">加载中...</p>
+            </div>
+        </div>
+    </div>
+
     <script>
         // ============================================================
         // 会话 ID 管理
@@ -199,6 +310,7 @@
 
         const SESSION_ID = getSessionId();
         console.log('[Session] ID:', SESSION_ID);
+
         // ============================================================
         // 全局状态
         // ============================================================
@@ -242,12 +354,12 @@
             const key = getCurrentConversationKey();
             const saved = conversations[key] || [];
             saved.forEach(msg => {
-                renderMessage(msg.role, msg.content, msg.tools || null);
+                renderMessage(msg.role, msg.content, msg.tools || null, null);
             });
         }
 
         // ============================================================
-        // Tab 切换（去掉自动刷新）
+        // Tab 切换
         // ============================================================
         function switchTab(tab) {
             activeRequestId++;
@@ -263,7 +375,7 @@
             const key = getCurrentConversationKey();
             const saved = conversations[key] || [];
             saved.forEach(msg => {
-                renderMessage(msg.role, msg.content, msg.tools || null);
+                renderMessage(msg.role, msg.content, msg.tools || null, null);
             });
 
             const modeSelector = document.querySelector('.mode-selector');
@@ -276,9 +388,9 @@
         }
 
         // ============================================================
-        // 渲染消息
+        // 渲染消息（修复：增加 traceSessionId 参数）
         // ============================================================
-        function renderMessage(role, text, toolsUsed = null) {
+        function renderMessage(role, text, toolsUsed = null, traceSessionId = null) {
             const chatDiv = document.getElementById('chat');
             const msgDiv = document.createElement('div');
             msgDiv.className = role;
@@ -301,12 +413,22 @@
                 toolSpan.innerText = `🔧 使用工具: ${toolsUsed.join(', ')}`;
                 msgDiv.appendChild(toolSpan);
             }
+
+            // 如果是助手消息且有 trace session，添加按钮
+            if (role === 'assistant' && traceSessionId && currentMode === 'quick') {
+                const traceBtn = document.createElement('button');
+                traceBtn.className = 'trace-btn';
+                traceBtn.textContent = '🔍 查看推理过程';
+                traceBtn.onclick = () => showTrace(traceSessionId);
+                msgDiv.appendChild(traceBtn);
+            }
+
             chatDiv.appendChild(msgDiv);
             chatDiv.scrollTop = chatDiv.scrollHeight;
         }
 
         // ============================================================
-        // 审批列表刷新（手动）
+        // 审批列表刷新
         // ============================================================
         async function refreshApprovals() {
             try {
@@ -341,7 +463,7 @@
         }
 
         // ============================================================
-        // 文件上传逻辑（专用于智能问诊）
+        // 文件上传逻辑
         // ============================================================
         document.getElementById('fileInput').addEventListener('change', function(e) {
             const file = this.files[0];
@@ -366,7 +488,7 @@
             formData.append('file', file);
             formData.append('module', 'consult');
 
-            renderMessage('user', `📎 上传文件：${file.name}`);
+            renderMessage('user', `📎 上传文件：${file.name}`, null, null);
             const key = getCurrentConversationKey();
             const conv = conversations[key];
             conv.push({ role: 'user', content: `上传文件：${file.name}`, tools: null });
@@ -395,31 +517,31 @@
                             const content = data.content;
                             const systemMsg = `【文件内容】\n${content}`;
                             const preview = content.substring(0, 200) + (content.length > 200 ? '...' : '');
-                            renderMessage('assistant', `📄 已解析文件 ${file.name}，识别内容如下：\n\n${preview}\n\n（可继续提问）`);
+                            renderMessage('assistant', `📄 已解析文件 ${file.name}，识别内容如下：\n\n${preview}\n\n（可继续提问）`, null, null);
                             conv.push({ role: 'system', content: systemMsg, tools: null });
                         } else {
-                            renderMessage('assistant', `❌ 文件解析失败：${data.error || '未知错误'}`);
+                            renderMessage('assistant', `❌ 文件解析失败：${data.error || '未知错误'}`, null, null);
                             conv.push({ role: 'assistant', content: `文件解析失败：${data.error || '未知错误'}`, tools: null });
                         }
                     } catch (err) {
-                        renderMessage('assistant', `❌ 解析响应失败：${err.message}`);
+                        renderMessage('assistant', `❌ 解析响应失败：${err.message}`, null, null);
                         conv.push({ role: 'assistant', content: `解析响应失败：${err.message}`, tools: null });
                     }
                 } else {
-                    renderMessage('assistant', `❌ 上传失败 (HTTP ${xhr.status})`);
+                    renderMessage('assistant', `❌ 上传失败 (HTTP ${xhr.status})`, null, null);
                     conv.push({ role: 'assistant', content: `上传失败 (HTTP ${xhr.status})`, tools: null });
                 }
             };
 
             xhr.onerror = function() {
                 progressContainer.classList.remove('active');
-                renderMessage('assistant', '❌ 网络错误，请检查服务是否运行');
+                renderMessage('assistant', '❌ 网络错误，请检查服务是否运行', null, null);
                 conv.push({ role: 'assistant', content: '网络错误，请检查服务是否运行', tools: null });
             };
 
             xhr.ontimeout = function() {
                 progressContainer.classList.remove('active');
-                renderMessage('assistant', '❌ 上传超时，请重试');
+                renderMessage('assistant', '❌ 上传超时，请重试', null, null);
                 conv.push({ role: 'assistant', content: '上传超时，请重试', tools: null });
             };
 
@@ -429,7 +551,7 @@
         });
 
         // ============================================================
-        // 发送消息
+        // 发送消息（修复：增加 traceSessionId 和 convType）
         // ============================================================
         async function send() {
             const input = document.getElementById('question');
@@ -437,15 +559,42 @@
             if (!q) return;
             input.value = '';
 
+            // 确定 conversation type
+            let convType = 'quick';
+            if (currentTab === 'approval') {
+                convType = 'approval';
+            } else if (currentMode === 'consult') {
+                convType = 'consult';
+            }
+
             const key = getCurrentConversationKey();
             const conv = conversations[key];
 
-            renderMessage('user', q);
+            renderMessage('user', q, null, null);
             conv.push({ role: 'user', content: q, tools: null });
 
             const thisRequestId = ++activeRequestId;
+            const traceSessionId = 'trace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+            const traceQuestion = q.length > 200 ? q.substring(0, 200) + '...' : q;
 
             try {
+                // 🆕 启动 trace（检查响应状态）
+                try {
+                    const traceResp = await fetch('/trace/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: traceSessionId, question: traceQuestion })
+                    });
+                    if (!traceResp.ok) {
+                        const errorText = await traceResp.text();
+                        console.warn('[Trace] 启动失败 (HTTP ' + traceResp.status + '):', errorText);
+                    } else {
+                        console.log('[Trace] 启动成功:', traceSessionId);
+                    }
+                } catch (traceErr) {
+                    console.warn('[Trace] 启动失败 (网络错误):', traceErr);
+                }
+
                 let endpoint;
                 if (currentTab === 'approval') {
                     endpoint = '/ask';
@@ -455,9 +604,11 @@
 
                 const resp = await fetch(endpoint, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json',
+                    headers: {
+                        'Content-Type': 'application/json',
                         'X-Session-ID': SESSION_ID,
-                        'X-Conversation-Type': convType
+                        'X-Conversation-Type': convType,
+                        'X-Trace-ID': traceSessionId
                     },
                     body: JSON.stringify({
                         question: q,
@@ -474,7 +625,7 @@
                 const answer = data.result?.answer || '请求失败：请检查后端日志';
                 const toolsUsed = data.result?.tools_used || [];
 
-                renderMessage('assistant', answer, toolsUsed);
+                renderMessage('assistant', answer, toolsUsed, traceSessionId);
                 conv.push({ role: 'assistant', content: answer, tools: toolsUsed });
 
                 if (currentTab === 'approval') {
@@ -482,11 +633,10 @@
                 }
             } catch (err) {
                 if (thisRequestId !== activeRequestId) return;
-                renderMessage('assistant', '请求失败：' + err.message);
+                renderMessage('assistant', '请求失败：' + err.message, null, null);
                 conv.push({ role: 'assistant', content: '请求失败：' + err.message, tools: null });
             }
         }
-
         // ============================================================
         // 回车发送
         // ============================================================
@@ -498,50 +648,139 @@
         // 页面加载后初始化
         // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
-        // 先切换到 chat tab（默认）
-        switchTab('chat');
-        // 加载历史记录
-        loadHistory();
-    });
-
-    async function loadHistory() {
-        try {
-            const resp = await fetch(`/history?session_id=${SESSION_ID}&limit=50`);
-            const data = await resp.json();
-            if (data.success && data.items.length > 0) {
-                // 按 tab 分类恢复对话
-                data.items.forEach(item => {
-                    const key = item.conversation_type === 'quick' ? 'chat_quick' : 
-                            item.conversation_type === 'consult' ? 'chat_consult' : 'approval';
-                    if (!conversations[key]) {
-                        conversations[key] = [];
-                    }
-                    // 只恢复 user 和 assistant 消息，不恢复 system 消息
-                    if (item.role === 'user' || item.role === 'assistant') {
-                        conversations[key].push({
-                            role: item.role,
-                            content: item.content,
-                            tools: item.tools_used || null
-                        });
-                    }
-                });
-                // 刷新当前聊天界面
-                refreshCurrentChat();
-            }
-        } catch (err) {
-            console.error('加载历史记录失败:', err);
-        }
-    }
-
-    function refreshCurrentChat() {
-        const chatDiv = document.getElementById('chat');
-        chatDiv.innerHTML = '';
-        const key = getCurrentConversationKey();
-        const saved = conversations[key] || [];
-        saved.forEach(msg => {
-            renderMessage(msg.role, msg.content, msg.tools || null);
+            switchTab('chat');
+            loadHistory();
         });
-    }
+
+        async function loadHistory() {
+            try {
+                const resp = await fetch(`/history?session_id=${SESSION_ID}&limit=50`);
+                const data = await resp.json();
+                console.log('[DEBUG] loadHistory 返回数据:', data);
+                if (data.success && data.items.length > 0) {
+                    data.items.forEach(item => {
+                        const key = item.conversation_type === 'quick' ? 'chat_quick' :
+                            item.conversation_type === 'consult' ? 'chat_consult' : 'approval';
+                        if (!conversations[key]) {
+                            conversations[key] = [];
+                        }
+                        if (item.role === 'user' || item.role === 'assistant') {
+                            conversations[key].push({
+                                role: item.role,
+                                content: item.content,
+                                tools: item.tools_used || null
+                            });
+                        }
+                    });
+                    refreshCurrentChat();
+                }
+            } catch (err) {
+                console.error('加载历史记录失败:', err);
+            }
+        }
+
+        function refreshCurrentChat() {
+            const chatDiv = document.getElementById('chat');
+            chatDiv.innerHTML = '';
+            const key = getCurrentConversationKey();
+            const saved = conversations[key] || [];
+            saved.forEach(msg => {
+                renderMessage(msg.role, msg.content, msg.tools || null, null);
+            });
+        }
+
+        // ============================================================
+        // Trace 功能
+        // ============================================================
+        let currentTraceSessionId = null;
+
+        async function showTrace(sessionId) {
+            currentTraceSessionId = sessionId;
+            const modal = document.getElementById('traceModal');
+            const body = document.getElementById('traceBody');
+
+            body.innerHTML = '<p style="color:#888;">加载推理过程...</p>';
+            modal.classList.add('active');
+
+            try {
+                const resp = await fetch(`/trace/${sessionId}`);
+                const data = await resp.json();
+
+                if (!data.success) {
+                    body.innerHTML = `<p style="color:#e74c3c;">❌ ${data.error}</p>`;
+                    return;
+                }
+
+                const trace = data.data;
+                let html = `<p style="font-size:13px; color:#888; margin-bottom:12px;">问题：${trace.question}</p>`;
+                html += `<p style="font-size:12px; color:#aaa; margin-bottom:16px;">耗时：${(trace.end_time - trace.start_time || 0).toFixed(2)}s</p>`;
+
+                trace.steps.forEach((step) => {
+                    const typeNames = {
+                        'planner': '📋 Planner',
+                        'executor': '⚡ Executor',
+                        'retriever': '🔍 Retriever',
+                        'synthesizer': '🧠 Synthesizer'
+                    };
+                    const typeName = typeNames[step.step_type] || step.step_type;
+                    const time = new Date(step.timestamp * 1000).toLocaleTimeString();
+
+                    html += `<div class="trace-step">`;
+                    html += `<div class="step-header">${typeName} <span class="step-time">${time}</span></div>`;
+                    html += `<div class="step-detail">`;
+
+                    const d = step.data;
+                    if (step.step_type === 'planner') {
+                        html += `<div>📝 规则匹配结果：<code>${d.rule_result?.join(', ') || '无'}</code></div>`;
+                        html += `<div>🤖 使用 LLM 规划：${d.used_llm ? '是' : '否'}</div>`;
+                        html += `<div>✅ 最终工具：<div class="tool-list">${d.final_tools?.map(t => `<span class="tool-tag">${t}</span>`).join('') || '无'}</div></div>`;
+                    } else if (step.step_type === 'executor') {
+                        const status = d.success ? '✅' : '❌';
+                        html += `<div>${status} 工具：<strong>${d.tool}</strong></div>`;
+                        html += `<div>⏱️ 耗时：${d.duration?.toFixed(2)}s</div>`;
+                        if (d.success && d.result_preview) {
+                            html += `<div>📄 结果预览：${d.result_preview}</div>`;
+                        }
+                        if (!d.success && d.error) {
+                            html += `<div style="color:#e74c3c;">❌ 错误：${d.error}</div>`;
+                        }
+                    } else if (step.step_type === 'retriever') {
+                        html += `<div>🔍 原始查询：<code>${d.query}</code></div>`;
+                        if (d.rewritten_queries) {
+                            html += `<div>📝 改写查询：<br><code>${d.rewritten_queries.join('<br>')}</code></div>`;
+                        }
+                        if (d.result_count !== undefined) {
+                            html += `<div>📊 检索到 ${d.result_count} 条结果</div>`;
+                        }
+                        if (d.top_result_preview) {
+                            html += `<div>📄 最佳结果预览：${d.top_result_preview}</div>`;
+                        }
+                    } else if (step.step_type === 'synthesizer') {
+                        if (d.tool_count !== undefined) {
+                            html += `<div>📊 合成 ${d.tool_count} 个工具的结果</div>`;
+                            html += `<div>🔧 工具来源：${d.tool_sources?.join(', ') || '无'}</div>`;
+                        }
+                        if (d.answer_preview) {
+                            html += `<div>📄 合成答案预览：${d.answer_preview}</div>`;
+                        }
+                    }
+
+                    html += `</div></div>`;
+                });
+
+                body.innerHTML = html;
+            } catch (err) {
+                body.innerHTML = `<p style="color:#e74c3c;">❌ 加载失败：${err.message}</p>`;
+            }
+        }
+
+        function closeTrace() {
+            document.getElementById('traceModal').classList.remove('active');
+        }
+
+        document.getElementById('traceModal').addEventListener('click', function(e) {
+            if (e.target === this) closeTrace();
+        });
     </script>
 </body>
 </html>

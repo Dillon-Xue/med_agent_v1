@@ -55,7 +55,7 @@ class RAGTool:
     def retrieve(self, query: str):
         t0 = time.time()
         try:
-            docs = self.vectordb.similarity_search(query, k=5)
+            docs = self.retrieve_with_optimization(query, k=5, use_llm_rerank=False)
         except Exception as e:
             docs = []
             self.trace("retrieve_error", {"error": str(e)})

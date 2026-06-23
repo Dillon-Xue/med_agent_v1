@@ -4,7 +4,7 @@ from agents.llm_planner import LLMPlanner
 
 
 class Planner:
-    def __init__(self, use_llm: bool = True):
+    def __init__(self, use_llm: bool = True, trace_callback=None):
         self.rules = {
             "drug": ["成分", "说明书", "副作用", "禁忌", "用法", "剂量"],
             "guideline": ["指南", "治疗", "推荐", "临床", "诊疗"],
@@ -14,6 +14,7 @@ class Planner:
             "report": ["评估表", "生成报告", "生成评估表", "评估报告", "生成病历", "生成档案", "生成记录"]
         }
         self.use_llm = use_llm
+        self.trace_callback = trace_callback
         if self.use_llm:
             api_key = os.getenv("DASHSCOPE_API_KEY")
             if not api_key:
@@ -54,7 +55,9 @@ class Planner:
 
         return list(tools)
 
-    def run(self, question: str) -> dict:
+    def run(self, question: str, trace_callback=None) -> dict:
+        print(f"[Planner] ===== run 被调用 =====")
+        print(f"[Planner] 进入 run, trace_callback 是否为 None: {trace_callback is None}")
         # 🚀 最高优先级：检测“记住患者”等指令（直接在原始 question 中检测）
         if re.search(r'记住患者|记录患者|追加患者|补充患者', question):
             print(f"[Planner] 检测到患者操作指令，使用 patient 工具")
@@ -103,5 +106,17 @@ class Planner:
             if has_patient and "patient" not in tools:
                 tools.append("patient")
                 print("[Planner] LLM removed patient, re-adding it")
+
+        if trace_callback:
+            print("[Planner] 准备调用 trace_callback")
+            trace_callback("planner", {
+                "question": question,
+                "rule_result": tools,
+                "used_llm": self.use_llm and (len(tools) == 0 or len(tools) > 3),
+                "final_tools": tools
+            })
+            print("[Planner] trace_callback 调用完成")
+        else:
+            print("[Planner] trace_callback 为 None，跳过")
 
         return {"question": question, "tools": tools}

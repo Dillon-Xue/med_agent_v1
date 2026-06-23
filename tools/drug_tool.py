@@ -32,7 +32,7 @@ class DrugTool(BaseTool):
 
         # 检索（增加异常捕获）
         try:
-            docs = self.vectordb.similarity_search(query, k=5)
+            docs = self.retrieve_with_optimization(query, k=5, use_llm_rerank=False)
         except Exception as e:
             self.trace("error", {"stage": "retrieve", "error": str(e)})
             return build_response(

@@ -16,3 +16,6 @@ langgraph>=0.2.0
 python-multipart>=0.0.6
 python-docx>=0.8.11
 openpyxl>=3.0.0
+rank_bm25
+httpx
+requests

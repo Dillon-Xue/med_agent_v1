@@ -3,6 +3,9 @@ from openai import OpenAI
 from langchain_chroma import Chroma
 import os
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tools.retriever import HybridRetriever
+from typing import List, Optional
+
 
 PROJECT_ROOT = os.getenv("MED_AGENT_ROOT", os.getcwd())
 
@@ -17,6 +20,7 @@ class BaseTool(ABC):
             timeout=30.0
         )
         self.vectordb = None
+        self.retriever = None
 
     def load_db(self, embedding_fn):
         self.vectordb = Chroma(
@@ -24,6 +28,7 @@ class BaseTool(ABC):
             embedding_function=embedding_fn,
             collection_name="langchain"
         )
+        self.retriever = HybridRetriever(self.vectordb)
         print(f"[BASE_TOOL] Chroma loaded from {self.db_path}")
 
     @retry(
@@ -54,3 +59,17 @@ class BaseTool(ABC):
     @abstractmethod
     def run(self, query: str):
         pass 
+    
+    def retrieve_with_optimization(self, query: str, k: int = 5, use_llm_rerank: bool = False) -> List:
+        """使用优化后的检索（混合检索 + 可选LLM重排序）"""
+        # 1. 混合检索
+        results = self.retriever.retrieve(query, k=k*2)
+        docs = [doc for doc, score in results]
+
+        # 2. 可选 LLM 重排序
+        if use_llm_rerank and len(docs) > k:
+            docs = self.retriever.rerank_with_llm(query, docs, top_k=k)
+        else:
+            docs = docs[:k]
+
+        return docs
