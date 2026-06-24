@@ -1,9 +1,9 @@
+import os, re, json, hashlib, time, logging, pymysql, asyncio, httpx, requests, io
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
-import os, re, json, hashlib, time, logging, pymysql, asyncio, httpx, requests
 from logging.handlers import RotatingFileHandler
 from contextvars import ContextVar
 from typing import List, Optional
@@ -12,6 +12,7 @@ from agents.executor import Executor
 from agents.synthesizer import Synthesizer
 from agents.consult_graph import ConsultGraph
 from tools.tool_registry import get_tools
+from docx import Document
 # =========================
 # Trace 存储（内存）
 # =========================
@@ -635,12 +636,14 @@ async def consult(req: ChatRequest, request: Request):
         answer = consult_graph.run(question, history)
         session_id = request.headers.get("X-Session-ID")
         if session_id:
-            # 保存用户问题
-            save_conversation(session_id, "user", question, 
-                            conversation_type="consult")
-            # 保存助手回答
-            save_conversation(session_id, "assistant", answer, 
-                            conversation_type="consult")
+            try:
+                # 保存用户问题
+                save_conversation(session_id, "user", question, conversation_type="consult")
+                # 保存助手回答
+                save_conversation(session_id, "assistant", answer, conversation_type="consult")
+                logger.info(f"[历史记录] 已保存智能问诊会话 {session_id}")
+            except Exception as e:
+                logger.error(f"[历史记录] 保存失败: {e}")
         return {
             "success": True,
             "result": {
@@ -950,3 +953,419 @@ async def clear_trace(session_id: str):
         if session_id in trace_store:
             del trace_store[session_id]
     return {"status": "ok"}
+
+
+## 审批助手侧边栏，支持待审批列表点击查看详情
+class ApprovalDetailResponse(BaseModel):
+    success: bool
+    data: Optional[dict] = None
+    error: Optional[str] = None
+
+@app.get(
+    "/approval/{approval_id}",
+    tags=["审批"],
+    summary="获取审批详情",
+    description="根据审批 ID 获取完整的审批信息，包括 content 详情"
+)
+async def get_approval_detail(approval_id: str, request: Request):
+    """
+    获取指定审批项的完整详情
+    """
+    from tools.approval_tool import ApprovalTool
+    from chat import get_current_tenant
+    
+    tenant_id = get_current_tenant()
+    user = current_session_user if current_session_user else None
+    
+    if not user:
+        return ApprovalDetailResponse(
+            success=False,
+            error="请先声明用户身份（用户：xxx）"
+        )
+    
+    try:
+        conn = pymysql.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "root"),
+            password=os.getenv("DB_PASSWORD", "yourpassword"),
+            database=os.getenv("DB_NAME", "patient_db"),
+            charset='utf8mb4'
+        )
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            """SELECT id, title, content, type, requester, requester_role, 
+                      reviewer, reviewer_role, status, comment, created_at, reviewed_at 
+               FROM approvals 
+               WHERE id = %s AND tenant_id = %s""",
+            (approval_id, tenant_id)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return ApprovalDetailResponse(
+                success=False,
+                error=f"未找到审批项 {approval_id}"
+            )
+        
+        # 权限校验：只有审批人或申请人才能查看详情
+        if row[4] != user and row[6] != user:
+            return ApprovalDetailResponse(
+                success=False,
+                error=f"您没有权限查看此审批项"
+            )
+        
+        return ApprovalDetailResponse(
+            success=True,
+            data={
+                "id": row[0],
+                "title": row[1],
+                "content": row[2],
+                "type": row[3],
+                "requester": row[4],
+                "requester_role": row[5],
+                "reviewer": row[6],
+                "reviewer_role": row[7],
+                "status": row[8],
+                "comment": row[9],
+                "created_at": row[10].strftime("%Y-%m-%d %H:%M:%S") if row[10] else "",
+                "reviewed_at": row[11].strftime("%Y-%m-%d %H:%M:%S") if row[11] else ""
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取审批详情失败: {e}")
+        return ApprovalDetailResponse(
+            success=False,
+            error=str(e)
+        )
+
+@app.get(
+    "/preview/{filename}",
+    tags=["报告"],
+    summary="预览评估表",
+    description="在线预览评估表 Word 文档内容，无需下载"
+)
+async def preview_report(filename: str):
+    """
+    将 Word 文档内容转换为 HTML 预览
+    """
+    file_path = f"reports/{filename}"
+    
+    if not os.path.exists(file_path):
+        return {"success": False, "error": "文件不存在"}
+    
+    try:
+        from docx import Document
+        doc = Document(file_path)
+        
+        # ===== 提取段落内容 =====
+        paragraphs = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                paragraphs.append(text)
+        
+        # ===== 提取表格中的所有文本 =====
+        all_texts = []
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    text = cell.text.strip()
+                    if text and text not in all_texts:
+                        all_texts.append(text)
+        
+        # ===== 过滤无意义的单字 =====
+        skip_words = ["用", "药", "计", "划", "单", "基", "本", "信", "息", "诊", "断", "评", "估", "结", "果", "方", "式"]
+        filtered = []
+        for t in all_texts:
+            if len(t) >= 2 or t in ["用药计划单", "基本信息", "联系方式"]:
+                filtered.append(t)
+            elif t not in skip_words:
+                filtered.append(t)
+        
+        # ===== 解析键值对 =====
+        patient_info = {}
+        fields_order = ["姓名", "性别", "年龄", "联系方式", "家庭住址", "身份证号", "临床诊断", "主要问题", "目前用药", "用药史", "过敏史", "症状描述", "评估结果", "用药目标", "用药注意事项"]
+        
+        # 提取键值对
+        for text in filtered:
+            for field in fields_order:
+                if field in text:
+                    # 提取值（去除字段名）
+                    value = text.replace(field, "").replace("：", "").replace(":", "").strip()
+                    if value:
+                        patient_info[field] = value
+                    break
+            else:
+                # 如果没有匹配到字段名，作为附加信息
+                if "：" in text or ":" in text:
+                    parts = re.split(r'[：:]', text, 1)
+                    if len(parts) == 2:
+                        key = parts[0].strip()
+                        value = parts[1].strip()
+                        patient_info[key] = value
+                else:
+                    # 尝试匹配常见格式：1. 诊断内容
+                    match = re.match(r'^(\d+)\.\s*(.+)$', text)
+                    if match:
+                        patient_info[f"项目{match.group(1)}"] = match.group(2)
+                    else:
+                        patient_info["其他信息"] = text
+        
+        # ===== 构建美观的 HTML =====
+        preview_html = """
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>评估表预览</title>
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body { 
+                    font-family: 'Microsoft YaHei', 'PingFang SC', Arial, sans-serif; 
+                    padding: 40px 20px; 
+                    max-width: 900px; 
+                    margin: 0 auto; 
+                    background: #f0f4f8;
+                    min-height: 100vh;
+                }
+                .container {
+                    background: #ffffff;
+                    border-radius: 16px;
+                    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+                    padding: 40px 48px;
+                    margin-bottom: 20px;
+                }
+                .header {
+                    text-align: center;
+                    padding-bottom: 24px;
+                    border-bottom: 3px solid #1a73e8;
+                    margin-bottom: 28px;
+                }
+                .header h1 {
+                    font-size: 28px;
+                    color: #1a73e8;
+                    font-weight: 700;
+                    letter-spacing: 2px;
+                }
+                .header .subtitle {
+                    color: #888;
+                    font-size: 14px;
+                    margin-top: 6px;
+                }
+                .info-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 12px 32px;
+                    background: #f8f9fa;
+                    border-radius: 10px;
+                    padding: 16px 20px;
+                    margin-bottom: 24px;
+                }
+                .info-grid .item {
+                    display: flex;
+                    align-items: baseline;
+                    padding: 4px 0;
+                }
+                .info-grid .label {
+                    font-weight: 600;
+                    color: #555;
+                    font-size: 14px;
+                    min-width: 70px;
+                }
+                .info-grid .value {
+                    color: #1a1a1a;
+                    font-size: 14px;
+                }
+                
+                .section {
+                    margin-bottom: 20px;
+                }
+                .section-title {
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #1a73e8;
+                    padding-bottom: 6px;
+                    border-bottom: 2px solid #e8ecf0;
+                    margin-bottom: 12px;
+                }
+                .section-content {
+                    padding: 8px 4px;
+                    line-height: 1.8;
+                    color: #333;
+                    font-size: 14px;
+                }
+                .section-content .field {
+                    padding: 4px 0;
+                }
+                .section-content .field-label {
+                    font-weight: 600;
+                    color: #555;
+                }
+                
+                .risk-box {
+                    background: #fef9e7;
+                    border-left: 4px solid #f39c12;
+                    padding: 16px 20px;
+                    border-radius: 6px;
+                    margin: 16px 0;
+                    font-size: 14px;
+                    line-height: 1.8;
+                    color: #333;
+                }
+                .risk-box strong {
+                    color: #e67e22;
+                }
+                
+                .medication-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 12px 0;
+                    font-size: 14px;
+                }
+                .medication-table td {
+                    padding: 10px 16px;
+                    border-bottom: 1px solid #e8ecf0;
+                    vertical-align: top;
+                }
+                .medication-table .label-cell {
+                    font-weight: 600;
+                    color: #555;
+                    width: 100px;
+                    background: #f8f9fa;
+                }
+                .medication-table .value-cell {
+                    color: #333;
+                }
+                
+                .footer {
+                    text-align: center;
+                    padding-top: 20px;
+                    border-top: 1px solid #e8ecf0;
+                    margin-top: 12px;
+                }
+                .footer .btn {
+                    display: inline-block;
+                    padding: 10px 28px;
+                    background: #1a73e8;
+                    color: #fff;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    font-weight: 500;
+                    transition: background 0.2s;
+                    margin: 0 8px;
+                }
+                .footer .btn:hover {
+                    background: #1557b0;
+                }
+                .footer .btn-outline {
+                    background: #fff;
+                    color: #555;
+                    border: 1px solid #ddd;
+                }
+                .footer .btn-outline:hover {
+                    background: #f5f5f5;
+                }
+                
+                @media (max-width: 600px) {
+                    .container { padding: 20px; }
+                    .info-grid { grid-template-columns: 1fr; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📋 评估表预览</h1>
+                    <div class="subtitle">用药方案评估报告</div>
+                </div>
+        """
+        
+        # ===== 基本信息卡片 =====
+        basic_fields = ["姓名", "性别", "年龄", "联系方式", "家庭住址", "身份证号"]
+        basic_items = []
+        for field in basic_fields:
+            if field in patient_info and patient_info[field]:
+                basic_items.append(f'<div class="item"><span class="label">{field}</span><span class="value">{patient_info[field]}</span></div>')
+        
+        if basic_items:
+            preview_html += '<div class="info-grid">' + "".join(basic_items) + '</div>'
+        
+        # ===== 段落内容 =====
+        for p in paragraphs:
+            if '风险告知书' in p:
+                continue
+            preview_html += f'<p style="font-size:14px;color:#333;line-height:1.8;margin:8px 0;">{p}</p>'
+        
+        # ===== 潜在风险告知书 =====
+        risk_text = None
+        for p in paragraphs:
+            if '风险告知书' in p or '潜在意外风险' in p:
+                risk_text = p
+                break
+        
+        if risk_text:
+            preview_html += f'''
+            <div class="risk-box">
+                <strong>⚠️ 潜在风险告知书</strong><br>
+                {risk_text}
+            </div>
+            '''
+        
+        # ===== 用药计划单 =====
+        preview_html += '''
+                <div class="section">
+                    <div class="section-title">💊 用药计划单</div>
+                    <table class="medication-table">
+        '''
+        
+        med_fields = ["临床诊断", "主要问题", "目前用药", "用药史", "过敏史", "症状描述", "评估结果", "用药目标", "用药注意事项"]
+        for field in med_fields:
+            if field in patient_info and patient_info[field]:
+                preview_html += f'''
+                        <tr>
+                            <td class="label-cell">{field}</td>
+                            <td class="value-cell">{patient_info[field]}</td>
+                        </tr>
+                '''
+        
+        preview_html += '''
+                    </table>
+                </div>
+        '''
+        
+        # ===== 其他信息 =====
+        other_items = []
+        for key, value in patient_info.items():
+            if key not in basic_fields and key not in med_fields:
+                other_items.append(f'<div class="field"><span class="field-label">{key}：</span>{value}</div>')
+        
+        if other_items:
+            preview_html += '''
+                <div class="section">
+                    <div class="section-title">📎 其他信息</div>
+                    <div class="section-content">
+            ''' + "".join(other_items) + '''
+                    </div>
+                </div>
+            '''
+        
+        # ===== 底部按钮 =====
+        preview_html += f'''
+                <div class="footer">
+                    <a href="/reports/{filename}" class="btn" download>📥 下载文档</a>
+                    <a href="javascript:window.close()" class="btn btn-outline">✕ 关闭预览</a>
+                </div>
+            </div>
+        </body>
+        </html>
+        '''
+        
+        return HTMLResponse(content=preview_html, media_type="text/html")
+        
+    except Exception as e:
+        logger.error(f"预览评估表失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": f"预览失败: {str(e)}"}

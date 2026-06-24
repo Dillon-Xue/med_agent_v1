@@ -348,15 +348,28 @@ class ConsultGraph:
         tool_list = plan.get("tools", ["drug", "guideline", "literature", "risk"])
         tool_list = [t for t in tool_list if t != "patient"]
 
-        if "report" in tool_list and current_patient:
+        if "report" in tool_list:
             import re
-            kw_match = re.search(r'(生成评估表|生成报告|生成档案|生成病历)', original_question)
-            if kw_match:
-                keyword = kw_match.group(1)
-                tool_question = f"{keyword} {current_patient}"
+            # 优先从原始问题中提取姓名（格式：生成评估表：张三 或 生成评估表 张三）
+            name_match = re.search(r'生成评估表[：:]\s*([\u4e00-\u9fa5]{2,4})', original_question)
+            if not name_match:
+                name_match = re.search(r'生成评估表\s*([\u4e00-\u9fa5]{2,4})', original_question)
+            if not name_match:
+                name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:评估表|报告|档案|病历)', original_question)
+            
+            if name_match:
+                extracted_name = name_match.group(1)
+                kw_match = re.search(r'(生成评估表|生成报告|生成档案|生成病历)', original_question)
+                if kw_match:
+                    keyword = kw_match.group(1)
+                    tool_question = f"{keyword} {extracted_name}"
+                else:
+                    tool_question = f"{original_question} {extracted_name}"
+                print(f"[ConsultGraph] 为 report 工具构建专用问题: {tool_question}")
             else:
-                tool_question = f"{original_question} {current_patient}"
-            print(f"[ConsultGraph] 为 report 工具构建专用问题: {tool_question}")
+                # 如果没有提取到姓名，使用原始问题（让 report_tool 自己处理）
+                tool_question = original_question
+                print(f"[ConsultGraph] 未提取到姓名，使用原始问题: {tool_question}")
         else:
             tool_question = enhanced
 
@@ -382,17 +395,21 @@ class ConsultGraph:
         question = state["question"]
         
         if current_patient and current_patient not in question:
-            if "生成评估表" in question:
-                question = f"生成评估表 {current_patient}"
-            elif "生成报告" in question:
-                question = f"生成报告 {current_patient}"
-            elif "生成档案" in question:
-                question = f"生成档案 {current_patient}"
-            elif "生成病历" in question:
-                question = f"生成病历 {current_patient}"
+            has_name = re.search(r'[\4e00-\u9fa5]{2,4}',question)
+            if not has_name:
+                if "生成评估表" in question:
+                    question = f"生成评估表 {current_patient}"
+                elif "生成报告" in question:
+                    question = f"生成报告 {current_patient}"
+                elif "生成档案" in question:
+                    question = f"生成档案 {current_patient}"
+                elif "生成病历" in question:
+                    question = f"生成病历 {current_patient}"
+                else:
+                    question = f"{current_patient} {question}"
+                print(f"[ConsultGraph] 已将患者姓名拼接到问题: {question}")
             else:
-                question = f"{current_patient} {question}"
-            print(f"[ConsultGraph] 已将患者姓名拼接到问题: {question}")
+                print(f"[ConsultGraph] 问题中已包含姓名，跳过拼接")
 
         if current_patient:
             try:
@@ -418,6 +435,7 @@ class ConsultGraph:
         patient_info = {}
         file_extracted_name = None
         file_content = ""
+        result = None  # 修复 result 变量未定义的问题
 
         if history:
             for msg in history:
@@ -434,50 +452,38 @@ class ConsultGraph:
         if file_content:
             self._log("检测到文件内容，开始自动提取患者信息...")
             extracted = self._extract_info_from_text(file_content)
-            self._log(f"【DEBUG】_extract_info_from_text 返回: {extracted}")
             
             if extracted.get("姓名"):
                 name = extracted["姓名"]
                 file_extracted_name = name
-                info_parts = []
                 
-                # 使用 extracted 中的字段（已包含性别、地址、电话）
-                if extracted.get("性别"):
-                    info_parts.append(f"性别：{extracted['性别']}")
-                if extracted.get("年龄"):
-                    info_parts.append(f"年龄：{extracted['年龄']}岁")
-                if extracted.get("家庭住址"):
-                    info_parts.append(f"家庭住址：{extracted['家庭住址']}")
-                if extracted.get("联系方式"):
-                    info_parts.append(f"联系方式：{extracted['联系方式']}")
-                if extracted.get("过敏史"):
-                    info_parts.append(f"过敏史：{extracted['过敏史']}")
-                if extracted.get("用药史"):
-                    info_parts.append(f"用药史：{extracted['用药史']}")
-                if extracted.get("id_card"):
-                    info_parts.append(f"身份证号：{extracted['id_card']}")
-                
-                self._log(f"【DEBUG】最终 info_parts: {info_parts}")
-                
-                if info_parts:
-                    from tools.tool_registry import get_tools
-                    tools = get_tools()
-                    patient_tool = tools.get("patient")
-                    if patient_tool:
-                        info_str = "，".join(info_parts)
-                        self._log(f"【DEBUG】保存到数据库的 info 字符串: {info_str}")
-                        patient_tool.remember(file_extracted_name, info_str, append=False, id_card=extracted.get("id_card"))
-                        self._log(f"已自动保存患者 {file_extracted_name} 的档案：{info_parts}")
-                    
-                    # 更新 patient_info（用于后续）
-                    for key in ["年龄", "过敏史", "用药史", "性别", "家庭住址", "联系方式", "id_card"]:
-                        if extracted.get(key):
-                            # 注意：id_card 存为身份证号
-                            if key == "id_card":
-                                patient_info["身份证号"] = extracted[key]
-                            else:
-                                patient_info[key] = extracted[key]
-                    self._log("从文件内容提取到患者信息:", patient_info)
+                from tools.tool_registry import get_tools
+                tools = get_tools()
+                patient_tool = tools.get("patient")
+                if patient_tool:
+                    result = patient_tool.remember(
+                        name=name,
+                        info="，".join([
+                            f"性别：{extracted.get('性别')}" if extracted.get('性别') else "",
+                            f"年龄：{extracted.get('年龄')}" if extracted.get('年龄') else "",
+                            f"联系方式：{extracted.get('联系方式')}" if extracted.get('联系方式') else "",
+                            f"家庭住址：{extracted.get('家庭住址')}" if extracted.get('家庭住址') else "",
+                            f"过敏史：{extracted.get('过敏史')}" if extracted.get('过敏史') else "",
+                            f"用药史：{extracted.get('用药史')}" if extracted.get('用药史') else "",
+                            f"症状：{extracted.get('症状')}" if extracted.get('症状') else "",
+                            f"身份证号：{extracted.get('id_card')}" if extracted.get('id_card') else "",
+                        ]).strip("，"),
+                        id_card=extracted.get('id_card'),
+                        gender=extracted.get('性别'),
+                        age=extracted.get('年龄'),
+                        phone=extracted.get('联系方式'),
+                        address=extracted.get('家庭住址'),
+                        allergy=extracted.get('过敏史'),
+                        medication=extracted.get('用药史'),
+                        symptoms=extracted.get('症状')
+                    )
+                    if result:
+                        self._log(f"已保存患者 {name}，缺失字段提示: {result.get('debug', {}).get('missing_fields', [])}")
 
         self._log("问题:", question)
         self._log("历史:", history)
@@ -488,13 +494,36 @@ class ConsultGraph:
         all_user_text += " " + question
         self._log("所有用户文本:", all_user_text)
 
+        # ===== 🆕 提取患者姓名（支持多种格式） =====
+        name = None
+
+        # 1. 尝试从“我是XXX”格式提取
         name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
-        name = name_match.group(1) if name_match else None
+        if name_match:
+            name = name_match.group(1)
+            self._log(f"从身份声明提取姓名: {name}")
+
+        # 2. 尝试从“生成病历 XXX”格式提取
+        if not name:
+            name_match = re.search(r'(?:生成病历|生成评估表|生成报告|生成档案)\s*[:：]?\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
+            if name_match:
+                name = name_match.group(1)
+                self._log(f"从生成命令提取姓名: {name}")
+
+        # 3. 尝试从“XXX的XXX”格式提取
+        if not name:
+            name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:信息|档案|病历|评估)', all_user_text)
+            if name_match:
+                name = name_match.group(1)
+                self._log(f"从查询命令提取姓名: {name}")
+
+        # 4. 从文件内容提取的姓名作为兜底
         if not name and file_extracted_name:
             name = file_extracted_name
             self._log("使用从文件内容提取的姓名:", name)
 
         self._log("提取姓名:", name)
+        
         if name:
             db_info = self._get_patient_info_from_db(name)
             if db_info:
