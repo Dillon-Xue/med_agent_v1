@@ -86,6 +86,14 @@ class ReportTool:
         )
 
     def _generate_from_candidate(self, candidate: dict) -> dict:
+        doctor_id = self._get_doctor_id()
+        if candidate.get("doctor_id") != doctor_id:
+            return build_response(
+                answer="❌ 您没有权限操作该患者的数据",
+                source="report",
+                success=False
+            )
+        
         id_card = candidate.get("id_card", "")
         if not id_card:
             return build_response(
@@ -369,3 +377,12 @@ class ReportTool:
         output_path = os.path.join(self.output_dir, f"{name}_评估表_{timestamp}.docx")
         doc.save(output_path)
         return output_path
+
+    def _get_doctor_id(self) -> str:
+        try:
+            import chat
+            if hasattr(chat, 'current_session_user') and chat.current_session_user:
+                return chat.current_session_user
+        except ImportError:
+            pass
+        return "default"

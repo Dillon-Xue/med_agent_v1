@@ -70,9 +70,9 @@ class PatientTool:
                     tenant_id VARCHAR(50) DEFAULT 'default',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    UNIQUE KEY idx_name_idcard (name, id_card),
+                    UNIQUE KEY idx_name_idcard (name, id_card,  doctor_id),
                     INDEX idx_tenant (tenant_id),
-                    INDEX idx_name (name)
+                    INDEX idx_doctor (doctor_id)
                 )
             ''')
         
@@ -88,6 +88,16 @@ class PatientTool:
             pass
         return "default"
 
+     # 🆕 获取当前医生 ID
+    def _get_doctor_id(self) -> str:
+        try:
+            import chat
+            if hasattr(chat, 'current_session_user') and chat.current_session_user:
+                return chat.current_session_user
+        except ImportError:
+            pass
+        return "default"
+
     def _get_existing_patient(self, name: str, id_card: str = None) -> dict:
         """
         根据姓名和身份证号查询已有记录
@@ -95,12 +105,14 @@ class PatientTool:
         """
         conn = self._get_connection()
         cursor = conn.cursor()
+        tenant_id = self._get_tenant()
+        doctor_id = self._get_doctor_id()
         
         if id_card:
             # 先用 name + id_card 查询
             cursor.execute(
-                "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info FROM patients WHERE name = %s AND id_card = %s",
-                (name, id_card)
+                "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, doctor_id FROM patients WHERE name = %s AND id_card = %s AND tenant_id = %s AND doctor_id = %s",
+                (name, id_card, tenant_id, doctor_id)
             )
             row = cursor.fetchone()
             if row:
@@ -116,12 +128,13 @@ class PatientTool:
                     "medication": row[7] or "",
                     "symptoms": row[8] or "",
                     "diagnosis": row[9] or "",
-                    "info": row[10] or ""
+                    "info": row[10] or "",
+                    "doctor_id": row[11] or ""
                 }
             # 🆕 如果 name + id_card 查不到，尝试仅用 name 查询
             cursor.execute(
-                "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info FROM patients WHERE name = %s",
-                (name,)
+                "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, doctor_id FROM patients WHERE name = %s  AND tenant_id = %s AND doctor_id = %s",
+                (name, tenant_id, doctor_id)
             )
             row = cursor.fetchone()
             conn.close()
@@ -140,7 +153,8 @@ class PatientTool:
                         "medication": row[7] or "",
                         "symptoms": row[8] or "",
                         "diagnosis": row[9] or "",
-                        "info": row[10] or ""
+                        "info": row[10] or "",
+                        "doctor_id": row[11] or ""
                     }
                 else:
                     print(f"[PatientTool] 警告：已存在同名患者 {name} 但 id_card 不同 ({row[3]})，请确认是否为同一人")
@@ -156,13 +170,14 @@ class PatientTool:
                         "medication": row[7] or "",
                         "symptoms": row[8] or "",
                         "diagnosis": row[9] or "",
-                        "info": row[10] or ""
+                        "info": row[10] or "",
+                        "doctor_id": row[11] or ""
                     }
         else:
             # 没有 id_card，仅用 name 查询
             cursor.execute(
-                "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info FROM patients WHERE name = %s",
-                (name,)
+                "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, doctor_id FROM patients WHERE name = %s AND tenant_id = %s AND doctor_id = %s",
+                (name, tenant_id, doctor_id)
             )
             row = cursor.fetchone()
             conn.close()
@@ -178,7 +193,8 @@ class PatientTool:
                     "medication": row[7] or "",
                     "symptoms": row[8] or "",
                     "diagnosis": row[9] or "",
-                    "info": row[10] or ""
+                    "info": row[10] or "",
+                    "doctor_id": row[11] or ""
                 }
         
         return None
@@ -205,7 +221,6 @@ class PatientTool:
             value = data.get(field["key"])
             if value is None or (isinstance(value, str) and value.strip() == ""):
                 missing.append(field)
-        
         return missing
 
     def remember(self, name: str, info: str = None, append: bool = False, 
@@ -222,6 +237,9 @@ class PatientTool:
         print(f"[PatientTool.remember] 结构化参数: allergy={allergy}, medication={medication}, symptoms={symptoms}, diagnosis={diagnosis}")
 
         name = name.strip()
+        tenant_id = self._get_tenant()
+        doctor_id = self._get_doctor_id()
+        print(f"[PatientTool.remember] tenant_id: {tenant_id}, doctor_id: {doctor_id}")
 
         # ===== 🆕 如果结构化字段为空，用 LLM 从 info 中解析 =====
         if info and not any([gender, age, phone, address, allergy, medication, symptoms, diagnosis, id_card]):
@@ -315,12 +333,12 @@ class PatientTool:
                             address = %s, allergy = %s, medication = %s, 
                             symptoms = %s, diagnosis = %s, info = %s, 
                             updated_at = CURRENT_TIMESTAMP 
-                        WHERE name = %s AND id_card = %s
+                        WHERE name = %s AND id_card = %s AND tenant_id = %s AND doctor_id = %s
                     """
                     params = (final_gender, final_age, final_id_card, final_phone, 
                             final_address, final_allergy, final_medication, 
                             final_symptoms, final_diagnosis, final_info, 
-                            name, existing_id_card)
+                            name, existing_id_card, tenant_id, doctor_id)
             else:
                     # 旧记录没有身份证号 → 仅用 name 匹配
                 sql = """
@@ -329,11 +347,11 @@ class PatientTool:
                         address = %s, allergy = %s, medication = %s, 
                         symptoms = %s, diagnosis = %s, info = %s, 
                         updated_at = CURRENT_TIMESTAMP 
-                    WHERE name = %s
+                    WHERE name = %s AND tenant_id = %s AND doctor_id = %s
                 """
                 params = (final_gender, final_age, final_id_card, final_phone, 
                         final_address, final_allergy, final_medication, 
-                        final_symptoms, final_diagnosis, final_info, name)
+                        final_symptoms, final_diagnosis, final_info, name, tenant_id, doctor_id)
             cursor.execute(sql, params)
             print(f"[PatientTool.remember] 更新影响行数: {cursor.rowcount}")
             action = "更新"
@@ -341,10 +359,10 @@ class PatientTool:
             # 插入新记录
             sql = """
                 INSERT INTO patients 
-                (name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, tenant_id) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, tenant_id, doctor_id) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            params = (name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, new_info, tenant_id)
+            params = (name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, new_info, tenant_id, doctor_id)
             cursor.execute(sql, params)
             print(f"[PatientTool.remember] 插入影响行数: {cursor.rowcount}")
             action = "新建"
@@ -402,6 +420,8 @@ class PatientTool:
             debug={
                 "name": name,
                 "id_card": id_card,
+                "doctor_id": doctor_id,
+                "tenant_id": tenant_id,
                 "action": action,
                 "missing_fields": [f["key"] for f in missing],
                 "saved_data": saved_data
@@ -418,9 +438,11 @@ class PatientTool:
         name = name.strip()
         conn = self._get_connection()
         cursor = conn.cursor()
+        tenant_id = self._get_tenant()
+        doctor_id = self._get_doctor_id()
         cursor.execute(
-            "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info FROM patients WHERE name LIKE %s",
-            (f"%{name}%",)
+            "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, doctor_id FROM patients WHERE name LIKE %s AND tenant_id = %s AND doctor_id = %s",
+            (f"%{name}%", tenant_id, doctor_id)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -437,7 +459,8 @@ class PatientTool:
                 "medication": row[7] or "",
                 "symptoms": row[8] or "",
                 "diagnosis": row[9] or "",
-                "info": row[10] or ""
+                "info": row[10] or "",
+                "doctor_id": row[11] or ""
             }
             for row in rows
         ]
@@ -446,9 +469,11 @@ class PatientTool:
         """根据身份证号查询"""
         conn = self._get_connection()
         cursor = conn.cursor()
+        tenant_id = self._get_tenant()
+        doctor_id = self._get_doctor_id()
         cursor.execute(
-            "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info FROM patients WHERE id_card = %s",
-            (id_card,)
+            "SELECT name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, doctor_id FROM patients WHERE id_card = %s AND tenant_id = %s AND doctor_id = %s",
+            (id_card, tenant_id, doctor_id)
         )
         row = cursor.fetchone()
         conn.close()
@@ -464,7 +489,8 @@ class PatientTool:
                 "medication": row[7] or "",
                 "symptoms": row[8] or "",
                 "diagnosis": row[9] or "",
-                "info": row[10] or ""
+                "info": row[10] or "",
+                "doctor_id": row[11] or ""
             }
         return None
 

@@ -227,25 +227,6 @@ async def process_question(question: str, history: list, trace_callback=None) ->
             "trace": {"executor": []}
         }
 
-    # 纯中文姓名预检
-    if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', stripped):
-        from tools.tool_registry import get_tools
-        tools = get_tools()
-        patient_tool = tools.get("patient")
-        if patient_tool:
-            info = patient_tool.recall(stripped)
-            if info:
-                return {
-                    "success": True,
-                    "result": {
-                        "answer": f"📋 患者 {stripped} 的档案：\n{info}",
-                        "tools_used": ["patient"],
-                        "plan": {"question": question, "tools": ["patient"]},
-                        "tool_results": []
-                    },
-                    "trace": {"executor": []}
-                }
-
     # 构建上下文（历史 + 患者档案预加载）
     if history:
         recent = history[-5:]
@@ -383,6 +364,30 @@ async def ask(req: ChatRequest, request: Request):
                 "success": True,
                 "result": {
                     "answer": f"✅ 已识别当前用户：{current_session_user}",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
+    # 🆕 2. 身份查询（审批助手 / 快速问答 通用）
+    if question in ["用户是谁", "我是谁", "当前用户", "whoami"]:
+        if current_session_user:
+            return {
+                "success": True,
+                "result": {
+                    "answer": f"👤 当前用户：{current_session_user}",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
+        else:
+            return {
+                "success": True,
+                "result": {
+                    "answer": "⚠️ 当前未识别用户，请先声明身份：用户：doctor_张",
                     "tools_used": [],
                     "plan": {"question": question, "tools": []},
                     "tool_results": []
@@ -563,6 +568,31 @@ async def consult(req: ChatRequest, request: Request):
                 "success": True,
                 "result": {
                     "answer": f"✅ 已识别当前用户：{current_session_user}",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
+
+    # 🆕 2. 身份查询
+    if question in ["用户是谁", "我是谁", "当前用户", "whoami"]:
+        if current_session_user:
+            return {
+                "success": True,
+                "result": {
+                    "answer": f"👤 当前用户：{current_session_user}",
+                    "tools_used": [],
+                    "plan": {"question": question, "tools": []},
+                    "tool_results": []
+                },
+                "trace": {"executor": []}
+            }
+        else:
+            return {
+                "success": True,
+                "result": {
+                    "answer": "⚠️ 当前未识别用户，请先声明身份：用户：doctor_张",
                     "tools_used": [],
                     "plan": {"question": question, "tools": []},
                     "tool_results": []

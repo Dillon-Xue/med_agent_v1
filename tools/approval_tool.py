@@ -19,6 +19,15 @@ class ApprovalTool:
             database=self.db_name,
             charset='utf8mb4'
         )
+    def _get_doctor_id(self) -> str:
+        """获取当前医生ID（用于数据隔离）"""
+        try:
+            import chat
+            if hasattr(chat, 'current_session_user') and chat.current_session_user:
+                return chat.current_session_user
+        except ImportError:
+            pass
+        return "default"
 
     def _get_tenant(self):
         try:
@@ -49,12 +58,13 @@ class ApprovalTool:
         import random
         approval_id = f"APP-{time.strftime('%Y%m%d')}-{random.randint(100, 999)}"
         tenant_id = self._get_tenant()
+        doctor_id = self._get_doctor_id()
         reviewer = reviewer or requester
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO approvals (id, title, content, type, requester, reviewer, tenant_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (approval_id, title, content, type, requester, reviewer, tenant_id)
+            "INSERT INTO approvals (id, title, content, type, requester, reviewer, doctor_id, tenant_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (approval_id, title, content, type, requester, reviewer, doctor_id, tenant_id)
         )
         conn.commit()
         conn.close()
@@ -71,7 +81,7 @@ class ApprovalTool:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, title, requester, created_at FROM approvals "
-            "WHERE tenant_id = %s AND reviewer = %s AND status = 'pending' "
+            "WHERE tenant_id = %s AND reviewer = %s  AND status = 'pending' "
             "ORDER BY created_at DESC",
             (tenant_id, user)
         )
@@ -93,9 +103,9 @@ class ApprovalTool:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, title, requester, created_at FROM approvals "
-            "WHERE tenant_id = %s AND reviewer = %s AND status = 'pending' "
+            "WHERE tenant_id = %s AND reviewer = %s  AND status = 'pending' "
             "ORDER BY created_at DESC",
-            (tenant_id, user)
+            (tenant_id, user,)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -154,7 +164,7 @@ class ApprovalTool:
             "SELECT id, title, requester, comment, created_at, reviewed_at FROM approvals "
             "WHERE tenant_id = %s AND reviewer = %s AND status = 'rejected' "
             "ORDER BY reviewed_at DESC",
-            (tenant_id, user)
+            (tenant_id, user, doctor_id)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -242,15 +252,16 @@ class ApprovalTool:
     def approve(self, approval_id: str, query: str = "") -> dict:
         approval_id = approval_id.strip()
         user = self._get_current_user(query)
-        print(f"[DEBUG] approve - id: {approval_id}, user: {user}")
+        doctor_id = self._get_doctor_id()
+        print(f"[DEBUG] approve - id: {approval_id}, user: {user}, doctor_id: {doctor_id}")
 
         conn = self._get_connection()
         cursor = conn.cursor()
 
         # 先查询当前记录
         cursor.execute(
-            "SELECT id, reviewer, status FROM approvals WHERE id = %s",
-            (approval_id,)
+            "SELECT id, reviewer, status FROM approvals WHERE id = %s AND doctor_id = %s",
+            (approval_id, doctor_id)
         )
         row = cursor.fetchone()
         if not row:
@@ -279,8 +290,8 @@ class ApprovalTool:
 
         # 执行更新
         cursor.execute(
-            "UPDATE approvals SET status='approved', reviewed_at=NOW() WHERE id = %s AND status = 'pending'",
-            (approval_id,)
+            "UPDATE approvals SET status='approved', reviewed_at=NOW() WHERE id = %s AND doctor_id = %s AND status = 'pending'",
+            (approval_id, doctor_id)
         )
         affected = cursor.rowcount
         conn.commit()
@@ -301,14 +312,15 @@ class ApprovalTool:
     def reject(self, approval_id: str, comment: str = "", query: str = "") -> dict:
         approval_id = approval_id.strip()
         user = self._get_current_user(query)
-        print(f"[DEBUG] reject - id: {approval_id}, user: {user}, comment: {comment}")
+        doctor_id = self._get_doctor_id()
+        print(f"[DEBUG] reject - id: {approval_id}, user: {user}, doctor_id: {doctor_id}, comment: {comment}")
 
         conn = self._get_connection()
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT id, reviewer, status FROM approvals WHERE id = %s",
-            (approval_id,)
+            "SELECT id, reviewer, status FROM approvals WHERE id = %s AND doctor_id = %s",
+            (approval_id, doctor_id)
         )
         row = cursor.fetchone()
         if not row:
@@ -337,8 +349,8 @@ class ApprovalTool:
 
         cursor.execute(
             "UPDATE approvals SET status='rejected', comment=%s, reviewed_at=NOW() "
-            "WHERE id = %s AND status = 'pending'",
-            (comment, approval_id)
+            "WHERE id = %s AND doctor_id = %s AND status = 'pending'",
+            (comment, approval_id, doctor_id)
         )
         affected = cursor.rowcount
         conn.commit()

@@ -393,7 +393,7 @@ class ConsultGraph:
     def _synthesize(self, state: AgentState) -> AgentState:
         current_patient = state.get("current_patient", "")
         question = state["question"]
-        
+        """
         if current_patient and current_patient not in question:
             has_name = re.search(r'[\4e00-\u9fa5]{2,4}',question)
             if not has_name:
@@ -418,6 +418,7 @@ class ConsultGraph:
                 print(f"[ConsultGraph] 已同步患者姓名到会话: {current_patient}")
             except Exception as e:
                 print(f"[ConsultGraph] 同步患者姓名失败: {e}")
+        """
 
         print(f"[ConsultGraph._synthesize] 开始执行")
         results = state.get("tool_results", [])
@@ -436,6 +437,34 @@ class ConsultGraph:
         file_extracted_name = None
         file_content = ""
         result = None  # 修复 result 变量未定义的问题
+
+    # 🆕 检测是否是查询患者信息的意图
+        if re.search(r'[\u4e00-\u9fa5]{2,4}\s*的(?:信息|档案|病历|评估|报告)', question):
+            # 提取姓名
+            name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:信息|档案|病历|评估|报告)', question)
+            if name_match:
+                name = name_match.group(1)
+                # 从数据库查询患者
+                from tools.tool_registry import get_tools
+                tools = get_tools()
+                patient_tool = tools.get("patient")
+                if patient_tool:
+                    info = patient_tool.recall(name)
+                    if info:
+                        lines = [f"📋 患者 {name} 的档案："]
+                        if info.get("gender"): lines.append(f"性别：{info['gender']}")
+                        if info.get("age"): lines.append(f"年龄：{info['age']}")
+                        if info.get("phone"): lines.append(f"联系方式：{info['phone']}")
+                        if info.get("address"): lines.append(f"家庭住址：{info['address']}")
+                        if info.get("allergy"): lines.append(f"过敏史：{info['allergy']}")
+                        if info.get("medication"): lines.append(f"用药史：{info['medication']}")
+                        if info.get("symptoms"): lines.append(f"症状：{info['symptoms']}")
+                        if info.get("diagnosis"): lines.append(f"诊断：{info['diagnosis']}")
+                        if info.get("id_card"): lines.append(f"身份证号：{info['id_card']}")
+                        return "\n".join(lines)
+                    else:
+                        return f"❌ 未找到患者 {name} 的档案"
+
 
         if history:
             for msg in history:
@@ -495,27 +524,35 @@ class ConsultGraph:
         self._log("所有用户文本:", all_user_text)
 
         # ===== 🆕 提取患者姓名（支持多种格式） =====
+        # ===== 提取患者姓名（按优先级，过滤无效词） =====
         name = None
+        invalid_names = ["信息", "患者", "查询", "档案", "病历", "评估", "报告", "生成"]
 
-        # 1. 尝试从“我是XXX”格式提取
-        name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
+        # 1. 优先匹配 "XXX的信息" 格式
+        name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:信息|档案|病历|评估|报告)', all_user_text)
         if name_match:
-            name = name_match.group(1)
-            self._log(f"从身份声明提取姓名: {name}")
+            candidate = name_match.group(1)
+            if candidate not in invalid_names:
+                name = candidate
+                self._log(f"从查询命令提取姓名: {name}")
 
-        # 2. 尝试从“生成病历 XXX”格式提取
+        # 2. 匹配 "生成病历 XXX" / "生成评估表 XXX" 等格式
         if not name:
             name_match = re.search(r'(?:生成病历|生成评估表|生成报告|生成档案)\s*[:：]?\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
             if name_match:
-                name = name_match.group(1)
-                self._log(f"从生成命令提取姓名: {name}")
+                candidate = name_match.group(1)
+                if candidate not in invalid_names:
+                    name = candidate
+                    self._log(f"从生成命令提取姓名: {name}")
 
-        # 3. 尝试从“XXX的XXX”格式提取
+        # 3. 匹配 "我是XXX" / "我叫XXX" / "患者XXX" 格式
         if not name:
-            name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:信息|档案|病历|评估)', all_user_text)
+            name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
             if name_match:
-                name = name_match.group(1)
-                self._log(f"从查询命令提取姓名: {name}")
+                candidate = name_match.group(1)
+                if candidate not in invalid_names:
+                    name = candidate
+                    self._log(f"从身份声明提取姓名: {name}")
 
         # 4. 从文件内容提取的姓名作为兜底
         if not name and file_extracted_name:

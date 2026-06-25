@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS patients (
     symptoms VARCHAR(500) COMMENT '症状描述',
     diagnosis VARCHAR(500) COMMENT '临床诊断',
     info TEXT COMMENT '原始信息备份',
+    doctor_id VARCHAR(100) DEFAULT 'default' COMMENT '所属医生ID',
     tenant_id VARCHAR(50) DEFAULT 'default',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -36,12 +37,14 @@ CREATE TABLE IF NOT EXISTS approvals (
     reviewer_role VARCHAR(50),
     status VARCHAR(20) DEFAULT 'pending',
     comment TEXT,
+    doctor_id VARCHAR(100) DEFAULT 'default' COMMENT '所属医生ID',   -- 🆕 新增
     tenant_id VARCHAR(50) DEFAULT 'default',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reviewed_at TIMESTAMP,
     INDEX idx_tenant (tenant_id),
     INDEX idx_status (status),
-    INDEX idx_requester (requester)
+    INDEX idx_requester (requester),
+    INDEX idx_doctor (doctor_id)   -- 🆕 新增索引
 );
 
 -- ============================================
@@ -61,4 +64,23 @@ CREATE TABLE IF NOT EXISTS conversations (
     INDEX idx_session (session_id, created_at),
     INDEX idx_tenant (tenant_id),
     INDEX idx_type (conversation_type)
+);
+
+
+-- ============================================
+-- 合规记录表
+-- ============================================
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(50) DEFAULT 'default',
+    action VARCHAR(50) NOT NULL,
+    resource_type VARCHAR(50) NOT NULL,
+    resource_id VARCHAR(100),
+    detail TEXT,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_user (user_id),
+    INDEX idx_tenant (tenant_id),
+    INDEX idx_created (created_at)
 );
