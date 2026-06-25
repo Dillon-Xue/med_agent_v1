@@ -211,7 +211,7 @@ class ReportTool:
 示例：长沙市 → 湖南省长沙市
 """
             resp = client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
@@ -312,7 +312,7 @@ class ReportTool:
 用药注意事项：...
 """
         resp = client.chat.completions.create(
-            model="qwen-plus",
+            model=self.model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3
         )

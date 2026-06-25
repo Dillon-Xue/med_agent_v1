@@ -1,19 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from langchain_chroma import Chroma
-from ingest import DashscopeEmbeddings
-from openai import OpenAI
+from utils.embeddings import DashscopeEmbeddings
+from utils.config import get_llm_client
 from dotenv import load_dotenv
 import os
 
-# 加载环境变量
 load_dotenv()
 
-# 初始化百炼客户端
-client = OpenAI(
-    api_key=os.getenv("DASHSCOPE_API_KEY"),
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
+# 🆕 使用统一客户端工厂
+client, model = get_llm_client()
 
 # 向量库目录
 VECTOR_DB_DIR = "/mnt/d/A_Study/Agent/Med_Agent/vector_db"
@@ -24,33 +20,28 @@ vectordb = Chroma(
     embedding_function=DashscopeEmbeddings()
 )
 
-# FastAPI应用
 app = FastAPI(title="本地医药知识库RAG Agent")
 
-# 请求体模型
 class QuestionRequest(BaseModel):
     question: str
 
-# 根接口
 @app.get("/")
 def read_root():
     return {"message": "本地医药知识库Agent在线，访问 /ask 接口进行问答。"}
 
-# 问答接口
 @app.post("/ask")
 def ask_agent_api(req: QuestionRequest):
     question = req.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
 
-    # 检索 Top3 相似文本
     docs = vectordb.similarity_search(question, k=3)
     context = "\n".join([doc.page_content for doc in docs])
 
-    # 调用 Qwen 生成答案
     try:
+        # 🆕 使用 model 变量，不是 self.model
         response = client.chat.completions.create(
-            model="qwen-plus",
+            model=model,
             messages=[
                 {"role": "system", "content": "你是医药研发知识库助手，请基于上下文回答问题。"},
                 {"role": "user", "content": f"上下文：{context}\n问题：{question}"}

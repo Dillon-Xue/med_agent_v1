@@ -1,12 +1,12 @@
 import json
 from openai import OpenAI
+from utils.config import get_llm_client
 
 class LLMPlanner:
     def __init__(self, api_key):
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        # 🆕 使用统一客户端工厂
+        self.client, self.model = get_llm_client(api_key)
+        print(f"[LLMPlanner] Using model: {self.model}")
 
     def select_tools(self, question: str) -> list:
         tools_desc = {
@@ -20,7 +20,7 @@ class LLMPlanner:
 请返回需要调用的工具列表（JSON格式，例如["drug","risk"]），只输出JSON，不要解释。"""
         try:
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 timeout=10

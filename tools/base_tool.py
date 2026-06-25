@@ -5,7 +5,7 @@ import os
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from tools.retriever import HybridRetriever
 from typing import List, Optional
-
+from utils.config import get_llm_provider, get_ollama_base_url, get_ollama_model, get_llm_client
 
 PROJECT_ROOT = os.getenv("MED_AGENT_ROOT", os.getcwd())
 
@@ -14,11 +14,10 @@ class BaseTool(ABC):
         self.base_dir = PROJECT_ROOT
         self.db_path = os.path.join(self.base_dir, "vector_db", db_name)
         print(f"\n[BASE_TOOL] db_path = {self.db_path}")
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            timeout=30.0
-        )
+
+        self.client, self.model = get_llm_client(api_key, timeout=60.0)
+        print(f"[BASE_TOOL] Using model: {self.model}")
+
         self.vectordb = None
         self.retriever = None
 
@@ -37,7 +36,7 @@ class BaseTool(ABC):
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
-    def _llm_call_with_retry(self, messages, temperature=0.2, model="qwen-plus"):
+    def _llm_call_with_retry(self, messages, temperature=0.2, model=None):
         resp = self.client.chat.completions.create(
             model=model,
             messages=messages,
@@ -46,7 +45,7 @@ class BaseTool(ABC):
         )
         return resp.choices[0].message.content
 
-    def _safe_llm_call(self, messages, temperature=0.2, model="qwen-plus", fallback_context=None):
+    def _safe_llm_call(self, messages, temperature=0.2, model=None, fallback_context=None):
         try:
             return self._llm_call_with_retry(messages, temperature, model)
         except Exception as e:

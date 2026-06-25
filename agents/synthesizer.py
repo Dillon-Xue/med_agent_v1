@@ -1,12 +1,11 @@
 from openai import OpenAI
 import os
+from utils.config import get_llm_client
 
 class Synthesizer:
     def __init__(self, api_key):
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        self.client, self.model = get_llm_client(api_key, timeout=60.0)
+        print(f"[Synthesizer] Model: {self.model}")
 
     def run(self, augmented_question, tool_results, trace_callback=None):
         # 🆕 记录 trace（开始合成）
@@ -104,7 +103,7 @@ class Synthesizer:
 请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。"""
 
         resp = self.client.chat.completions.create(
-            model="qwen-plus",
+            model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}

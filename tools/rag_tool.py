@@ -4,16 +4,15 @@ from openai import OpenAI
 from langchain_chroma import Chroma
 from utils.response import build_response
 from utils.embeddings import DashscopeEmbeddings
+from utils.config import get_llm_client
 
 class RAGTool:
     def __init__(self, base_dir: str, api_key: str):
         self.base_dir = base_dir
         self.api_key = api_key
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            timeout=30.0
-        )
+        # 🆕 使用统一客户端工厂
+        self.client, self.model = get_llm_client(api_key, timeout=60.0)
+        print(f"[RAGTool] Using model: {self.model}")
         self.db_path = os.path.join(base_dir, "vector_db", "rag")
         self.embeddings = DashscopeEmbeddings()
         self.vectordb = Chroma(
@@ -40,7 +39,7 @@ class RAGTool:
         t0 = time.time()
         try:
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": f"改写为医学检索关键词（短句）：{q}"}],
                 temperature=0,
                 timeout=15.0
@@ -80,7 +79,7 @@ class RAGTool:
 
         try:
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[
                     {"role": "system", "content": "严格医学RAG，只能使用提供资料"},
                     {"role": "user", "content": f"资料：\n{context}\n\n问题：\n{query}"}

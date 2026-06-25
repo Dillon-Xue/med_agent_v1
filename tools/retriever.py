@@ -3,15 +3,14 @@ import os
 from typing import List, Tuple
 from rank_bm25 import BM25Okapi
 from openai import OpenAI
-
+from utils.config import get_llm_client
 
 class HybridRetriever:
     def __init__(self, vectordb):
         self.vectordb = vectordb
-        self.client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        # 🆕 使用统一客户端工厂
+        self.client, self.model = get_llm_client()
+        print(f"[HybridRetriever] Using model: {self.model}")
 
     def query_rewrite(self, query: str) -> List[str]:
         """用 LLM 生成 2-3 个不同角度的查询"""
@@ -25,7 +24,7 @@ class HybridRetriever:
 """
         try:
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2
             )
@@ -139,7 +138,7 @@ class HybridRetriever:
 
         try:
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )

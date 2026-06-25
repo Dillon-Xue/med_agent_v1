@@ -6,16 +6,15 @@ from openai import OpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from docx import Document
 from openpyxl import load_workbook
-
+from utils.config import get_llm_client
 
 class FileTool:
     """文件解析工具：支持图片（PNG/JPG）和 PDF 的内容提取"""
     
     def __init__(self, api_key: str):
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        # 🆕 使用统一客户端工厂
+        self.client, self.model = get_llm_client(api_key)
+        print(f"[FileTool] Using model: {self.model}")
 
     def parse_image(self, file_content: bytes, filename: str) -> str:
         """

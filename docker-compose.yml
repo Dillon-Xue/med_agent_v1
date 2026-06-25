@@ -2,25 +2,25 @@ version: '3.8'
 
 services:
   mysql-patient:
-      image: mysql:8.0
-      container_name: mysql-patient
-      restart: always
-      ports:
-        - "3306:3306"
-      environment:
-        MYSQL_ROOT_PASSWORD: your_strong_password
-        MYSQL_DATABASE: patient_db
-        MYSQL_USER: your_app_user
-        MYSQL_PASSWORD: your_app_password
-      volumes:
-        - mysql_patient_data:/var/lib/mysql
-        - ./init.sql:/docker-entrypoint-initdb.d/init.sql   # ← 新增
-      networks:
-        - med_agent_net
-      healthcheck:
-        test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-        timeout: 10s
-        retries: 10
+    image: mysql:8.0
+    container_name: mysql-patient
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: your_strong_password
+      MYSQL_DATABASE: patient_db
+      MYSQL_USER: your_app_user
+      MYSQL_PASSWORD: your_app_password
+    volumes:
+      - mysql_patient_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - med_agent_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 10s
+      retries: 10
 
   medical-agent:
     build: .
@@ -37,6 +37,10 @@ services:
       - DB_PASSWORD=your_app_password
       - DB_NAME=patient_db
       - CRYPTO_KEY=${CRYPTO_KEY}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - LLM_PROVIDER=${LLM_PROVIDER:-dashscope}   # dashscope | ollama
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
     volumes:
       - /mnt/d/A_Study/Agent/Med_Agent/vector_db:/app/vector_db
       - ./logs:/app/logs
@@ -48,8 +52,23 @@ services:
       - med_agent_net
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - /mnt/d/A_Study/Agent/Med_Agent/ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=10m
+    networks:
+      - med_agent_net
+
 volumes:
   mysql_patient_data:
+  ollama_data:
 
 networks:
   med_agent_net:

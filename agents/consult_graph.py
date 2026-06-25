@@ -12,6 +12,7 @@ from agents.synthesizer import Synthesizer
 from tools.tool_registry import get_tools
 from openai import OpenAI
 from utils.response import mask_sensitive, mask_dict_sensitive
+from utils.config import get_llm_client
 
 # 全局调试开关
 DEBUG = True
@@ -21,11 +22,11 @@ class ConsultGraph:
         self.tools = get_tools()
         self.planner = Planner()
         self.executor = Executor(self.tools)
+        # 🆕 Synthesizer 使用 get_llm_client
         self.synthesizer = Synthesizer(api_key=os.getenv("DASHSCOPE_API_KEY"))
-        self.client = OpenAI(
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        # 🆕 使用统一客户端工厂
+        self.client, self.model = get_llm_client(os.getenv("DASHSCOPE_API_KEY"))
+        print(f"[ConsultGraph] Using model: {self.model}")
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -95,7 +96,7 @@ class ConsultGraph:
 只输出 JSON，不要其他内容。
 """
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )

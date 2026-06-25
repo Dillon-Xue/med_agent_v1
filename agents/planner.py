@@ -2,6 +2,7 @@ import os
 import re
 from agents.llm_planner import LLMPlanner
 from utils.response import mask_sensitive
+from utils.config import get_llm_client
 
 class Planner:
     def __init__(self, use_llm: bool = True, trace_callback=None):
@@ -16,6 +17,7 @@ class Planner:
         self.use_llm = use_llm
         self.trace_callback = trace_callback
         if self.use_llm:
+            # 🆕 从 config 获取 api_key，LLMPlanner 内部使用 get_llm_client
             api_key = os.getenv("DASHSCOPE_API_KEY")
             if not api_key:
                 raise ValueError("DASHSCOPE_API_KEY not set")

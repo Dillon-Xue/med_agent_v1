@@ -7,7 +7,7 @@ from utils.response import build_response
 from openai import OpenAI
 from utils.audit import log_audit
 from utils.crypto import encrypt_if_needed, decrypt_if_needed
-
+from utils.config import get_llm_client
 
 class PatientTool:
     def __init__(self):
@@ -16,10 +16,9 @@ class PatientTool:
         self.db_password = os.getenv("DB_PASSWORD", "yourpassword")
         self.db_name = os.getenv("DB_NAME", "patient_db")
         self.api_key = os.getenv("DASHSCOPE_API_KEY")
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        # 🆕 使用统一客户端工厂
+        self.client, self.model = get_llm_client(self.api_key)
+        print(f"[PatientTool] Using model: {self.model}")
         self._init_db()
 
     def _get_connection(self):
@@ -536,7 +535,7 @@ class PatientTool:
     """
             print(f"[PatientTool._llm_extract] 发送 prompt:\n{prompt}")
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
@@ -728,7 +727,7 @@ class PatientTool:
             print(f"[PatientTool] 发送给 LLM 的 prompt:\n{prompt}")
             
             resp = self.client.chat.completions.create(
-                model="qwen-plus",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
