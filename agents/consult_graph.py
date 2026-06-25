@@ -11,6 +11,7 @@ from agents.executor import Executor
 from agents.synthesizer import Synthesizer
 from tools.tool_registry import get_tools
 from openai import OpenAI
+from utils.response import mask_sensitive, mask_dict_sensitive
 
 # 全局调试开关
 DEBUG = True
@@ -50,10 +51,19 @@ class ConsultGraph:
         graph.add_edge("synthesize", END)
 
         return graph.compile()
-
+    
     def _log(self, *args, **kwargs):
         if DEBUG:
-            print("[DEBUG]", *args, **kwargs)
+            # 对打印内容脱敏
+            masked_args = []
+            for arg in args:
+                if isinstance(arg, dict):
+                    masked_args.append(mask_dict_sensitive(arg))
+                elif isinstance(arg, str):
+                    masked_args.append(mask_sensitive(arg))
+                else:
+                    masked_args.append(arg)
+            print("[DEBUG]", *masked_args, **kwargs)
 
     def _extract_info_from_text(self, text: str) -> dict:
         """使用 LLM 从文本中提取结构化患者信息，并用正则做补充提取"""
@@ -105,21 +115,21 @@ class ConsultGraph:
                 raw = data.get(val)
                 result[key] = str(raw) if raw is not None else None
             
-            print(f"[ConsultGraph] LLM 提取结果: {result}")
+            print(f"[ConsultGraph] LLM 提取结果:{mask_sensitive(result)}")
             
         except Exception as e:
             print(f"[ConsultGraph] LLM 提取失败，降级到正则: {e}")
         
         # 正则补充提取（合并结果）
         regex_result = self._extract_info_with_regex(text)
-        print(f"[ConsultGraph] 正则补充提取结果: {regex_result}")
+        print(f"[ConsultGraph] 正则补充提取结果: {mask_sensitive(regex_result)}")
         
         # 合并：如果 LLM 提取的字段为空，用正则的结果补充
         for key in ["姓名", "年龄", "过敏史", "用药史", "id_card", "性别", "家庭住址", "联系方式"]:
             if not result.get(key) and regex_result.get(key):
                 result[key] = regex_result[key]
         
-        print(f"[ConsultGraph] 最终提取结果: {result}")
+        print(f"[ConsultGraph] 最终提取结果: {mask_sensitive(result)}")
         return result
 
     def _extract_info_with_regex(self, text: str) -> dict:

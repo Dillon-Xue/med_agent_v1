@@ -1,7 +1,7 @@
 import os
 import re
 from agents.llm_planner import LLMPlanner
-
+from utils.response import mask_sensitive
 
 class Planner:
     def __init__(self, use_llm: bool = True, trace_callback=None):
@@ -67,7 +67,7 @@ class Planner:
         current_question = question
         if "当前问题：" in question:
             current_question = question.split("当前问题：")[-1].strip()
-        print(f"[Planner] 当前问题: {current_question}")
+        print(f"[Planner] 当前问题: {mask_sensitive(current_question)}")
 
         # 检测身份声明
         if re.match(r'^用户[：:]', current_question.strip()):

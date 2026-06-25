@@ -5,6 +5,8 @@ import pymysql
 import time
 from utils.response import build_response
 from openai import OpenAI
+from utils.audit import log_audit
+from utils.crypto import encrypt_if_needed, decrypt_if_needed
 
 
 class PatientTool:
@@ -121,8 +123,8 @@ class PatientTool:
                     "name": row[0],
                     "gender": row[1] or "",
                     "age": row[2] or "",
-                    "id_card": row[3] or "",
-                    "phone": row[4] or "",
+                    "id_card":decrypt_if_needed(row[3] or ""),
+                    "phone": decrypt_if_needed(row[4] or ""),
                     "address": row[5] or "",
                     "allergy": row[6] or "",
                     "medication": row[7] or "",
@@ -146,8 +148,8 @@ class PatientTool:
                         "name": row[0],
                         "gender": row[1] or "",
                         "age": row[2] or "",
-                        "id_card": row[3] or "",
-                        "phone": row[4] or "",
+                        "id_card":decrypt_if_needed(row[3] or ""),
+                        "phone": decrypt_if_needed(row[4] or ""),
                         "address": row[5] or "",
                         "allergy": row[6] or "",
                         "medication": row[7] or "",
@@ -163,8 +165,8 @@ class PatientTool:
                         "name": row[0],
                         "gender": row[1] or "",
                         "age": row[2] or "",
-                        "id_card": row[3] or "",
-                        "phone": row[4] or "",
+                        "id_card":decrypt_if_needed(row[3] or ""),
+                        "phone": decrypt_if_needed(row[4] or ""),
                         "address": row[5] or "",
                         "allergy": row[6] or "",
                         "medication": row[7] or "",
@@ -186,8 +188,8 @@ class PatientTool:
                     "name": row[0],
                     "gender": row[1] or "",
                     "age": row[2] or "",
-                    "id_card": row[3] or "",
-                    "phone": row[4] or "",
+                    "id_card":decrypt_if_needed(row[3] or ""),
+                    "phone": decrypt_if_needed(row[4] or ""),
                     "address": row[5] or "",
                     "allergy": row[6] or "",
                     "medication": row[7] or "",
@@ -224,9 +226,9 @@ class PatientTool:
         return missing
 
     def remember(self, name: str, info: str = None, append: bool = False, 
-                id_card: str = None, gender: str = None, age: str = None,
-                phone: str = None, address: str = None, allergy: str = None,
-                medication: str = None, symptoms: str = None, diagnosis: str = None) -> dict:
+             id_card: str = None, gender: str = None, age: str = None,
+             phone: str = None, address: str = None, allergy: str = None,
+             medication: str = None, symptoms: str = None, diagnosis: str = None) -> dict:
         """
         保存患者信息（结构化字段 + 唯一确认）
         """
@@ -239,6 +241,10 @@ class PatientTool:
         name = name.strip()
         tenant_id = self._get_tenant()
         doctor_id = self._get_doctor_id()
+
+        # 🆕 对敏感字段加密
+        id_card_encrypted = encrypt_if_needed(id_card) if id_card else None
+        phone_encrypted = encrypt_if_needed(phone) if phone else None
         print(f"[PatientTool.remember] tenant_id: {tenant_id}, doctor_id: {doctor_id}")
 
         # ===== 🆕 如果结构化字段为空，用 LLM 从 info 中解析 =====
@@ -256,6 +262,9 @@ class PatientTool:
             if parsed.get("symptoms"): symptoms = parsed["symptoms"]
             if parsed.get("diagnosis"): diagnosis = parsed["diagnosis"]
             if parsed.get("id_card"): id_card = parsed["id_card"]
+            # 重新加密
+            id_card_encrypted = encrypt_if_needed(id_card) if id_card else None
+            phone_encrypted = encrypt_if_needed(phone) if phone else None
         
         # 如果没有身份证号，提示
         if not id_card:
@@ -274,24 +283,9 @@ class PatientTool:
         if id_card: info_parts.append(f"身份证号：{id_card}")
         new_info = "，".join(info_parts) if info_parts else (info or "无详细信息")
 
-        # 构建当前数据
-        current_data = {
-            "name": name,
-            "gender": gender or "",
-            "age": age or "",
-            "id_card": id_card or "",
-            "phone": phone or "",
-            "address": address or "",
-            "allergy": allergy or "",
-            "medication": medication or "",
-            "symptoms": symptoms or "",
-            "diagnosis": diagnosis or ""
-        }
-
         # 查询已有记录（唯一确认）
         existing = self._get_existing_patient(name, id_card)
         
-        tenant_id = self._get_tenant()
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -301,8 +295,8 @@ class PatientTool:
                 # 追加模式：保留原有值，补充新值
                 final_gender = gender if gender and gender.strip() != "" else existing.get("gender", "")
                 final_age = age if age and age.strip() != "" else existing.get("age", "")
-                final_id_card = id_card if id_card and id_card.strip() != "" else existing.get("id_card", "")
-                final_phone = phone if phone and phone.strip() != "" else existing.get("phone", "")
+                final_id_card = id_card_encrypted if id_card_encrypted else existing.get("id_card", "")
+                final_phone = phone_encrypted if phone_encrypted else existing.get("phone", "")
                 final_address = address if address and address.strip() != "" else existing.get("address", "")
                 final_allergy = allergy if allergy and allergy.strip() != "" else existing.get("allergy", "")
                 final_medication = medication if medication and medication.strip() != "" else existing.get("medication", "")
@@ -313,8 +307,8 @@ class PatientTool:
                 # 覆盖模式：用新值覆盖
                 final_gender = gender if gender and gender.strip() != "" else existing.get("gender", "")
                 final_age = age if age and age.strip() != "" else existing.get("age", "")
-                final_id_card = id_card if id_card and id_card.strip() != "" else existing.get("id_card", "")
-                final_phone = phone if phone and phone.strip() != "" else existing.get("phone", "")
+                final_id_card = id_card_encrypted if id_card_encrypted else existing.get("id_card", "")
+                final_phone = phone_encrypted if phone_encrypted else existing.get("phone", "")
                 final_address = address if address and address.strip() != "" else existing.get("address", "")
                 final_allergy = allergy if allergy and allergy.strip() != "" else existing.get("allergy", "")
                 final_medication = medication if medication and medication.strip() != "" else existing.get("medication", "")
@@ -322,25 +316,22 @@ class PatientTool:
                 final_diagnosis = diagnosis if diagnosis and diagnosis.strip() != "" else existing.get("diagnosis", "")
                 final_info = existing.get("info", "") + f"\n\n[追加于 {time.strftime('%Y-%m-%d %H:%M:%S')}] {new_info}"
 
-            # 🆕 用 existing 中的 id_card 作为匹配条件
             existing_id_card = existing.get("id_card")
 
             if existing_id_card:
-                    # 旧记录有身份证号 → 用 name + id_card 匹配
-                    sql = """
-                        UPDATE patients SET 
-                            gender = %s, age = %s, id_card = %s, phone = %s, 
-                            address = %s, allergy = %s, medication = %s, 
-                            symptoms = %s, diagnosis = %s, info = %s, 
-                            updated_at = CURRENT_TIMESTAMP 
-                        WHERE name = %s AND id_card = %s AND tenant_id = %s AND doctor_id = %s
-                    """
-                    params = (final_gender, final_age, final_id_card, final_phone, 
-                            final_address, final_allergy, final_medication, 
-                            final_symptoms, final_diagnosis, final_info, 
-                            name, existing_id_card, tenant_id, doctor_id)
+                sql = """
+                    UPDATE patients SET 
+                        gender = %s, age = %s, id_card = %s, phone = %s, 
+                        address = %s, allergy = %s, medication = %s, 
+                        symptoms = %s, diagnosis = %s, info = %s, 
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE name = %s AND id_card = %s AND tenant_id = %s AND doctor_id = %s
+                """
+                params = (final_gender, final_age, final_id_card, final_phone, 
+                        final_address, final_allergy, final_medication, 
+                        final_symptoms, final_diagnosis, final_info, 
+                        name, existing_id_card, tenant_id, doctor_id)
             else:
-                    # 旧记录没有身份证号 → 仅用 name 匹配
                 sql = """
                     UPDATE patients SET 
                         gender = %s, age = %s, id_card = %s, phone = %s, 
@@ -351,18 +342,21 @@ class PatientTool:
                 """
                 params = (final_gender, final_age, final_id_card, final_phone, 
                         final_address, final_allergy, final_medication, 
-                        final_symptoms, final_diagnosis, final_info, name, tenant_id, doctor_id)
+                        final_symptoms, final_diagnosis, final_info, 
+                        name, tenant_id, doctor_id)
             cursor.execute(sql, params)
             print(f"[PatientTool.remember] 更新影响行数: {cursor.rowcount}")
             action = "更新"
         else:
-            # 插入新记录
+            # 🆕 插入新记录（使用原始字段，不是 final_*）
             sql = """
                 INSERT INTO patients 
                 (name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, tenant_id, doctor_id) 
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            params = (name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, new_info, tenant_id, doctor_id)
+            params = (name, gender, age, id_card_encrypted, phone_encrypted, 
+                    address, allergy, medication, symptoms, diagnosis, 
+                    new_info, tenant_id, doctor_id)
             cursor.execute(sql, params)
             print(f"[PatientTool.remember] 插入影响行数: {cursor.rowcount}")
             action = "新建"
@@ -371,27 +365,40 @@ class PatientTool:
         conn.close()
         print(f"[PatientTool.remember] 操作完成，action={action}")
 
-        # 构建返回数据
-        saved_data = {
-            "name": name,
-            "gender": final_gender if existing else gender,
-            "age": final_age if existing else age,
-            "id_card": final_id_card if existing else id_card,
-            "phone": final_phone if existing else phone,
-            "address": final_address if existing else address,
-            "allergy": final_allergy if existing else allergy,
-            "medication": final_medication if existing else medication,
-            "symptoms": final_symptoms if existing else symptoms,
-            "diagnosis": final_diagnosis if existing else diagnosis
-        }
+        # 🆕 构建返回数据（解密后返回给用户）
+        if existing:
+            # 更新时使用 final_* 变量
+            saved_data = {
+                "name": name,
+                "gender": final_gender,
+                "age": final_age,
+                "id_card": decrypt_if_needed(final_id_card) if final_id_card else "",
+                "phone": decrypt_if_needed(final_phone) if final_phone else "",
+                "address": final_address,
+                "allergy": final_allergy,
+                "medication": final_medication,
+                "symptoms": final_symptoms,
+                "diagnosis": final_diagnosis
+            }
+        else:
+            # 新建时使用原始字段
+            saved_data = {
+                "name": name,
+                "gender": gender or "",
+                "age": age or "",
+                "id_card": decrypt_if_needed(id_card_encrypted) if id_card_encrypted else "",
+                "phone": decrypt_if_needed(phone_encrypted) if phone_encrypted else "",
+                "address": address or "",
+                "allergy": allergy or "",
+                "medication": medication or "",
+                "symptoms": symptoms or "",
+                "diagnosis": diagnosis or ""
+            }
         
-        # 检查缺失字段
         missing = self.check_missing_fields(saved_data)
         
-        # 构建返回消息
         answer = f"✅ 已{action}患者 {name} 的信息"
         
-        # 显示已记录的信息
         recorded = []
         if saved_data.get("gender"): recorded.append(f"性别：{saved_data['gender']}")
         if saved_data.get("age"): recorded.append(f"年龄：{saved_data['age']}")
@@ -413,13 +420,13 @@ class PatientTool:
             answer += "\n\n💡 可以使用以下命令补充："
             answer += f"\n记住患者 {name}：<补充信息>"
             answer += f"\n或：追加患者 {name}：联系方式 17688909987，过敏史 无"
-        
+
         return build_response(
             answer=answer,
             source="patient",
             debug={
                 "name": name,
-                "id_card": id_card,
+                "id_card": decrypt_if_needed(id_card_encrypted) if id_card_encrypted else "",
                 "doctor_id": doctor_id,
                 "tenant_id": tenant_id,
                 "action": action,

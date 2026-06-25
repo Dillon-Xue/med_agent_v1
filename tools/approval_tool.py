@@ -2,7 +2,7 @@ import os
 import re
 import pymysql
 from utils.response import build_response
-
+from utils.crypto import encrypt_if_needed, decrypt_if_needed
 
 class ApprovalTool:
     def __init__(self):
@@ -60,11 +60,12 @@ class ApprovalTool:
         tenant_id = self._get_tenant()
         doctor_id = self._get_doctor_id()
         reviewer = reviewer or requester
+        content_encrypted = encrypt_if_needed(content)  # 🆕 加密
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO approvals (id, title, content, type, requester, reviewer, doctor_id, tenant_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (approval_id, title, content, type, requester, reviewer, doctor_id, tenant_id)
+            (approval_id, title, content_encrypted, type, requester, reviewer, doctor_id, tenant_id)  # 🆕 使用加密后的 content
         )
         conn.commit()
         conn.close()
@@ -260,8 +261,8 @@ class ApprovalTool:
 
         # 先查询当前记录
         cursor.execute(
-            "SELECT id, reviewer, status FROM approvals WHERE id = %s AND doctor_id = %s",
-            (approval_id, doctor_id)
+            "SELECT id, reviewer, status FROM approvals WHERE id = %s AND reviewer = %s",
+            (approval_id, user)
         )
         row = cursor.fetchone()
         if not row:
@@ -290,11 +291,22 @@ class ApprovalTool:
 
         # 执行更新
         cursor.execute(
-            "UPDATE approvals SET status='approved', reviewed_at=NOW() WHERE id = %s AND doctor_id = %s AND status = 'pending'",
-            (approval_id, doctor_id)
+            "UPDATE approvals SET status='approved', reviewed_at=NOW() WHERE id = %s AND reviewer = %s AND status = 'pending'",
+            (approval_id, user)
         )
         affected = cursor.rowcount
         conn.commit()
+        try:
+            from utils.audit import log_audit
+            log_audit(
+                action="APPROVE",
+                resource_type="approval",
+                resource_id=approval_id,
+                detail={"status": "approved", "reviewer": user},
+                ip=None
+            )
+        except Exception as e:
+            print(f"[Audit] 审批日志记录失败: {e}")
         conn.close()
         print(f"[DEBUG] approve - affected rows: {affected}")
 
@@ -319,8 +331,8 @@ class ApprovalTool:
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT id, reviewer, status FROM approvals WHERE id = %s AND doctor_id = %s",
-            (approval_id, doctor_id)
+            "SELECT id, reviewer, status FROM approvals WHERE id = %s AND reviewer = %s",
+            (approval_id, user)
         )
         row = cursor.fetchone()
         if not row:
@@ -349,11 +361,22 @@ class ApprovalTool:
 
         cursor.execute(
             "UPDATE approvals SET status='rejected', comment=%s, reviewed_at=NOW() "
-            "WHERE id = %s AND doctor_id = %s AND status = 'pending'",
-            (comment, approval_id, doctor_id)
+            "WHERE id = %s AND reviewer = %s AND status = 'pending'",
+            (comment, approval_id, user)
         )
         affected = cursor.rowcount
         conn.commit()
+        try:
+            from utils.audit import log_audit
+            log_audit(
+                action="REJECT",
+                resource_type="approval",
+                resource_id=approval_id,
+                detail={"status": "rejected", "comment": comment, "reviewer": user},
+                ip=None
+            )
+        except Exception as e:
+            print(f"[Audit] 审批日志记录失败: {e}")
         conn.close()
         print(f"[DEBUG] reject - affected rows: {affected}")
 

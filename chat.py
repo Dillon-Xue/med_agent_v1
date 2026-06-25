@@ -13,6 +13,8 @@ from agents.synthesizer import Synthesizer
 from agents.consult_graph import ConsultGraph
 from tools.tool_registry import get_tools
 from docx import Document
+from utils.audit import log_audit
+
 # =========================
 # Trace 存储（内存）
 # =========================
@@ -347,6 +349,7 @@ def save_conversation(session_id: str, role: str, content: str,
     response_model=AskResponse
 )
 async def ask(req: ChatRequest, request: Request):
+    import re 
     print(f"[ASK] ==== 请求开始 ====")
     print(f"[ASK] 所有 headers: {request.headers}")
     print(f"[ASK] X-Trace-ID: {request.headers.get('X-Trace-ID')}")
@@ -408,6 +411,38 @@ async def ask(req: ChatRequest, request: Request):
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
         result = approval_tool.run(question)  # 传入原始问题，不带历史
+    # 🆕 ===== 审计日志（在 chat.py 中记录） =====
+        try:
+            from utils.audit import log_audit
+            # 检查 result 中是否有审批通过/驳回的信息
+            answer = result.get("answer", "")
+            if "审批通过" in answer:
+                # 提取审批ID
+                import re
+                match = re.search(r'审批\s*([A-Z0-9\-]+)\s*已通过', answer)
+                if match:
+                    approval_id = match.group(1)
+                    log_audit(
+                        action="APPROVE",
+                        resource_type="approval",
+                        resource_id=approval_id,
+                        detail={"status": "approved"},
+                        ip=request.client.host
+                    )
+            elif "已驳回" in answer:
+                match = re.search(r'审批\s*([A-Z0-9\-]+)\s*已驳回', answer)
+                if match:
+                    approval_id = match.group(1)
+                    log_audit(
+                        action="REJECT",
+                        resource_type="approval",
+                        resource_id=approval_id,
+                        detail={"status": "rejected"},
+                        ip=request.client.host
+                    )
+        except Exception as e:
+            print(f"[Audit] 审批日志记录失败: {e}")
+
         # 🆕 保存审批助手的对话记录
         if session_id:
             print("[Chat] 审批拦截 - 开始保存对话")
