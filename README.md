@@ -251,6 +251,7 @@ PYTHONPATH=. pytest tests/ --cov=agents --cov=tools --cov-report=html
 docker exec med_agent bash -c "cd /app && PYTHONPATH=. pytest tests/ -v"
 
 # 项目结构说明
+```tree
 med_agent_v1/
 ├── agents/
 │   ├── planner.py           # 规则+LLM混合规划
@@ -295,6 +296,7 @@ med_agent_v1/
 ├── docker-compose.yml
 ├── requirements.txt         # 🆕 含pytest依赖
 └── README.md
+```
 
 # 待完善事项
 - L4语义记忆
