@@ -41,7 +41,6 @@ class HybridRetriever:
         return re.findall(r'\w+', text.lower())
 
     def _bm25_search(self, query: str, docs: List, top_k: int = 5) -> List[Tuple]:
-        """对已召回的文档进行 BM25 重排序"""
         if len(docs) < 2:
             return docs
 
@@ -51,63 +50,68 @@ class HybridRetriever:
         tokenized_query = self._tokenize(query)
 
         scores = bm25.get_scores(tokenized_query)
-        # 归一化分数
-        max_score = max(scores) if scores else 1
-        normalized_scores = [s / max_score for s in scores]
+        # 强制转换为 Python float，避免 NumPy 数组问题
+        scores = [float(s) for s in scores]
+        
+        max_score = max(scores) if scores and max(scores) > 0 else 1.0
+        normalized_scores = [float(s) / float(max_score) for s in scores]
 
-        # 混合得分：向量相似度(0-1) + BM25归一化(0-1)
         merged = []
         for idx, (doc, vec_score) in enumerate(docs):
-            # 向量得分越小越相似，转换为相似度(1 - vec_score)
+            # 确保 vec_score 是标量
+            if hasattr(vec_score, '__iter__') and not isinstance(vec_score, str):
+                vec_score = vec_score[0] if len(vec_score) > 0 else 0.0
+            vec_score = float(vec_score)
             vec_similarity = 1 - vec_score
-            bm25_score = normalized_scores[idx] if idx < len(normalized_scores) else 0
-            # 加权平均
+
+            bm25_score = normalized_scores[idx] if idx < len(normalized_scores) else 0.0
+            if hasattr(bm25_score, '__iter__') and not isinstance(bm25_score, str):
+                bm25_score = bm25_score[0] if len(bm25_score) > 0 else 0.0
+            bm25_score = float(bm25_score)
+
             merged_score = 0.6 * vec_similarity + 0.4 * bm25_score
             merged.append((doc, merged_score))
 
-        # 按得分降序排列
         merged.sort(key=lambda x: x[1], reverse=True)
         return merged[:top_k]
 
     def retrieve(self, query: str, k: int = 10, trace_callback=None) -> List[Tuple]:
-        """混合检索：查询改写 + 向量检索 + BM25"""
-        # 1. 查询改写
         print(f"[Retriever] 查询改写输入: {query}")
         queries = self.query_rewrite(query)
         print(f"[Retriever] 改写后的查询: {queries}")
 
-        # 🆕 记录 trace
         if trace_callback:
-            trace_callback("retriever", {
-                "query": query,
-                "rewritten_queries": queries
-            })
-        # 2. 多查询向量检索
+            trace_callback("retriever", {"query": query, "rewritten_queries": queries})
+
         all_docs = {}
         for q in queries:
             docs = self.vectordb.similarity_search_with_score(q, k=k)
             for doc, score in docs:
-                # 用内容前100字符 + 元数据作为唯一标识
+                # 强制转换 score 为标量
+                try:
+                    score_val = float(score)
+                except (TypeError, ValueError):
+                    score_val = float(score[0]) if len(score) > 0 else 0.0
                 doc_id = doc.page_content[:100] + str(doc.metadata)
-                if doc_id not in all_docs or score < all_docs[doc_id][1]:
-                    all_docs[doc_id] = (doc, score)
+                if doc_id not in all_docs or score_val < all_docs[doc_id][1]:
+                    all_docs[doc_id] = (doc, score_val)
 
         print(f"[Retriever] 向量检索去重后: {len(all_docs)} 条")
 
-        # 如果召回太少，补充原始查询检索
         if len(all_docs) < k:
             docs = self.vectordb.similarity_search_with_score(query, k=k*2)
             for doc, score in docs:
+                try:
+                    score_val = float(score)
+                except (TypeError, ValueError):
+                    score_val = float(score[0]) if len(score) > 0 else 0.0
                 doc_id = doc.page_content[:100] + str(doc.metadata)
                 if doc_id not in all_docs:
-                    all_docs[doc_id] = (doc, score)
+                    all_docs[doc_id] = (doc, score_val)
 
         doc_list = list(all_docs.values())
-
-        # 3. BM25 重排序
         reranked = self._bm25_search(query, doc_list, top_k=k)
-    
-        # 🆕 记录检索结果
+
         if trace_callback:
             trace_callback("retriever", {
                 "status": "complete",

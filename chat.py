@@ -14,6 +14,9 @@ from agents.consult_graph import ConsultGraph
 from tools.tool_registry import get_tools
 from docx import Document
 from utils.audit import log_audit
+from agents.supervisor import Supervisor  
+from agents.agent_factory import get_agent
+from agents.aggregator import Aggregator
 
 # =========================
 # Trace 存储（内存）
@@ -167,6 +170,8 @@ current_session_user = None
 # 组件初始化
 # =========================
 TOOLS = get_tools()
+supervisor = Supervisor()
+aggregator = Aggregator()
 planner = Planner()
 executor = Executor(TOOLS)
 synthesizer = Synthesizer(api_key=os.getenv("DASHSCOPE_API_KEY"))
@@ -278,17 +283,35 @@ async def process_question(question: str, history: list, trace_callback=None) ->
         final_augmented = augmented_question
 
     # 调用 Planner
-    plan = planner.run(question, trace_callback=trace_callback)
-    tool_list = plan.get("tools", [])
-    if not tool_list:
-        tool_list = ["drug", "guideline", "literature", "risk"]
+    route = supervisor.route(question)
+    primary = route.get("primary", "general")
+    secondary = route.get("secondary", [])
+    all_agents = [primary] + secondary
 
-    # 异步执行工具
-    tool_results = await executor.run(tool_list, final_augmented, trace_callback=trace_callback)
+    if trace_callback:
+        trace_callback("supervisor", {"primary": primary, "secondary": secondary})
 
-    # 合成答案
-    final_answer = synthesizer.run(final_augmented, tool_results, trace_callback=trace_callback)
+    if len(all_agents) == 1:
+        agent = get_agent(primary)
+        result = await agent.run(final_augmented, history, trace_callback=trace_callback)
+        final_answer = result["answer"]
+        tool_list = result.get("tools_used", [])
+        tool_results = result.get("tool_results", [])
+    else:
+        import asyncio
+        agents = [get_agent(s) for s in all_agents]
+        tasks = [a.run(final_augmented, history, trace_callback=trace_callback) for a in agents]
+        results = await asyncio.gather(*tasks)
+        agent_answers = {r["specialty"]: r["answer"] for r in results}
+        tool_list = []
+        tool_results = []
+        for r in results:
+            tool_list.extend(r.get("tools_used", []))
+            tool_results.extend(r.get("tool_results", []))
+        tool_list = list(dict.fromkeys(tool_list))
+        final_answer = aggregator.run(question, agent_answers)
 
+    plan = {"question": question, "tools": tool_list, "mode": "multi_agent"}
     return {
         "success": True,
         "result": {
@@ -299,7 +322,6 @@ async def process_question(question: str, history: list, trace_callback=None) ->
         },
         "trace": {"executor": tool_results}
     }
-
 
 def save_conversation(session_id: str, role: str, content: str, 
                       tools_used: list = None, file_name: str = None,
@@ -576,6 +598,9 @@ async def ask(req: ChatRequest, request: Request):
         except Exception as e:
             logger.error(f"[历史记录] 保存失败: {e}")
 
+    # 更新 trace 结束时间（如果 trace_id 存在）
+    if trace_id and trace_id in trace_store:
+        trace_store[trace_id]["end_time"] = time.time()
     return result
 
 # =========================

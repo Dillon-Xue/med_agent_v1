@@ -286,6 +286,7 @@
             const msgDiv = document.createElement('div');
             msgDiv.className = role;
             let formattedText = text.replace(/\n/g, '<br>');
+            formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
             formattedText = formattedText.replace(
                 /\[([^\]]+)\]\(([^)]+)\)/g,
                 function(match, linkText, url) {
@@ -630,11 +631,18 @@
                 let html = `<p style="font-size:13px; color:#888; margin-bottom:12px;">问题：${trace.question}</p>`;
                 html += `<p style="font-size:12px; color:#aaa; margin-bottom:16px;">耗时：${(trace.end_time - trace.start_time || 0).toFixed(2)}s</p>`;
                 trace.steps.forEach((step) => {
-                    const typeNames = { 'planner': '📋 Planner', 'executor': '⚡ Executor', 'retriever': '🔍 Retriever', 'synthesizer': '🧠 Synthesizer' };
+                    const typeNames = { 'planner': '📋 Planner', 'executor': '⚡ Executor', 'retriever': '🔍 Retriever', 'synthesizer': '🧠 Synthesizer', 'supervisor': '🧭 Supervisor 路由' };
                     const typeName = typeNames[step.step_type] || step.step_type;
                     const time = new Date(step.timestamp * 1000).toLocaleTimeString();
                     html += `<div class="trace-step"><div class="step-header">${typeName} <span class="step-time">${time}</span></div><div class="step-detail">`;
                     const d = step.data;
+
+                    let agentTag = '';
+                    if (d.agent) {
+                        const agentNames = {'cardiology': '❤️ 心外科', 'pharmacy': '💊 药剂科', 'general': '🏥 全科'};
+                        agentTag = `<div style="color:#1a73e8;font-weight:bold;">Agent: ${agentNames[d.agent] || d.agent}</div>`;
+                    }
+                        html += agentTag;
                     if (step.step_type === 'planner') {
                         html += `<div>📝 规则匹配结果：<code>${d.rule_result?.join(', ') || '无'}</code></div>`;
                         html += `<div>🤖 使用 LLM 规划：${d.used_llm ? '是' : '否'}</div>`;
@@ -654,6 +662,11 @@
                         if (d.tool_count !== undefined) html += `<div>📊 合成 ${d.tool_count} 个工具的结果</div>`;
                         if (d.tool_sources) html += `<div>🔧 工具来源：${d.tool_sources?.join(', ') || '无'}</div>`;
                         if (d.answer_preview) html += `<div>📄 合成答案预览：${d.answer_preview}</div>`;
+                    }else if (step.step_type === 'supervisor') {
+                        html += `<div>🎯 主科室：<strong>${d.primary}</strong></div>`;
+                        if (d.secondary && d.secondary.length) {
+                            html += `<div>📌 辅助科室：${d.secondary.join(', ')}</div>`;
+                        }
                     }
                     html += `</div></div>`;
                 });

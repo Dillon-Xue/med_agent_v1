@@ -6,7 +6,9 @@
 
 > **V2 新增特性**：基于 LangGraph 实现多轮交互式智能问诊，主动提取并追问患者缺失信息（年龄、过敏史、用药史），生成个性化用药建议。
 
-> ****V3 新特性**：多租户隔离 + 自动审批闭环。支持不同租户（医院/科室）数据隔离，对话驱动的审批管理，评估表生成后自动创建审批项，侧边栏实时展示待审批列表。
+> **V3 新特性**：多租户隔离 + 自动审批闭环。支持不同租户（医院/科室）数据隔离，对话驱动的审批管理，评估表生成后自动创建审批项，侧边栏实时展示待审批列表。
+
+> **V4 新特性**：多 Agent 协作（Supervisor + 心外科/药剂科/全科 Agent 并行执行）、单元测试全覆盖。
 
 ## 技术栈
 
@@ -17,10 +19,11 @@
 | 嵌入模型 | text-embedding-v4 |
 | 向量数据库 | Chroma (本地) |
 | 关系数据库 | MySQL 8.0 |
-| Agent 框架 | LangChain |
+| Agent 框架 | LangChain + LangGraph |
 | 容器化 | Docker + Docker Compose |
 | 监控 | Prometheus (指标暴露) |
 | 日志 | RotatingFileHandler (日志轮转) |
+| 测试 | pytest + pytest-asyncio + pytest-cov |
 
 ## 核心功能
 
@@ -50,6 +53,8 @@
 | **支持用户隔离（V3）** | 智能问诊支持用户隔离，不同的医生登录，只能查看和编辑各自名下的病人信息 |
 | **日志和数据库中关键信息加密（V3）** | 对患者的身份证号和手机号做加密展示 |
 | **支持对接本地模型，并支持切换（V3）** | 从环境变量修改是本地模型还是云端API |
+| **多Agent协同（V4）** | 独立出全科、心外科、药剂科三个agent，对接在快速对话窗口 |
+
 
 ## 架构图
 ```mermaid
@@ -133,6 +138,34 @@ graph TD
     U --> Y[显示结果]
 ```
 
+### V4 多 Agent 协作架构
+```mermaid
+graph TD
+    A[用户] --> B[FastAPI /ask]
+    B --> C[Supervisor 路由]
+    C -->|cardiology| D1[心外科 Agent]
+    C -->|pharmacy| D2[药剂科 Agent]
+    C -->|general| D3[全科 Agent]
+    
+    D1 --> E1[Planner_心外科]
+    D2 --> E2[Planner_药剂科]
+    D3 --> E3[Planner_全科]
+    
+    E1 --> F1[Executor]
+    E2 --> F2[Executor]
+    E3 --> F3[Executor]
+    
+    F1 --> G[Synthesizer_心外科]
+    F2 --> G2[Synthesizer_药剂科]
+    F3 --> G3[Synthesizer_全科]
+    
+    G --> H[Aggregator 综合]
+    G2 --> H
+    G3 --> H
+    
+    H --> I[返回最终答案]
+```
+
 ## 快速开始
 
 ### 1. 环境要求
@@ -180,6 +213,13 @@ DB_HOST=localhost                               # 数据库地址
 DB_USER=root                                    # 数据库用户名
 DB_PASSWORD=your_strong_password                # 数据库密码
 DB_NAME=patient_db                              # 数据库名称
+
+# ============================================
+# 模型切换
+# ============================================
+OLLAMA_MODEL=qwen2.5:3b                         # 本地模型
+LLM_PROVIDER=dashscope                          # 本地和云上二选一
+#LLM_PROVIDER=ollama
 ```
 
 ### 4. 配置向量库
@@ -200,76 +240,65 @@ docker-compose up -d
 - 状态检查 http://localhost:8000/health   
 - 监控信息 http://localhost:8000/metrics   
 
+### 7. 运行测试
+#### 本地运行单元测试
+PYTHONPATH=. pytest tests/ -v
+
+#### 查看覆盖率
+PYTHONPATH=. pytest tests/ --cov=agents --cov=tools --cov-report=html
+
+#### 容器内运行
+docker exec med_agent bash -c "cd /app && PYTHONPATH=. pytest tests/ -v"
+
 # 项目结构说明
+med_agent_v1/
+├── agents/
+│   ├── planner.py           # 规则+LLM混合规划
+│   ├── executor.py          # 异步并行执行
+│   ├── synthesizer.py       # LLM答案合成
+│   ├── consult_graph.py     # LangGraph智能问诊
+│   ├── supervisor.py        # 🆕 多Agent路由
+│   ├── agent_factory.py     # 🆕 科室Agent工厂
+│   ├── aggregator.py        # 🆕 多Agent结果综合
+│   └── state.py             # LangGraph状态定义
+├── tools/
+│   ├── base_tool.py         # 工具基类（重试+降级）
+│   ├── drug_tool.py         # 药品说明书检索
+│   ├── guideline_tool.py    # 临床指南检索
+│   ├── literature_tool.py   # 医学文献检索
+│   ├── risk_tool.py         # 药物相互作用检索
+│   ├── patient_tool.py      # 患者档案CRUD
+│   ├── report_tool.py       # 评估表生成+审批
+│   ├── approval_tool.py     # 审批管理
+│   ├── file_tool.py         # 文件解析
+│   ├── retriever.py         # 混合检索（向量+BM25）
+│   └── tool_registry.py     # 工具注册表
+├── utils/
+│   ├── config.py            # LLM客户端工厂
+│   ├── embeddings.py        # DashScope嵌入
+│   ├── response.py          # 统一响应格式
+│   ├── crypto.py            # 敏感数据加密
+│   └── audit.py             # 审计日志
+├── tests/                   # 🆕 单元测试
+│   ├── conftest.py          # Mock夹具
+│   ├── test_planner.py      # 18个用例
+│   ├── test_executor.py     # 4个用例
+│   ├── test_synthesizer.py  # 7个用例
+│   ├── test_retriever.py    # 4个用例
+│   └── test_base_tool.py    # 覆盖重试降级
+├── static/
+│   └── index.html           # 前端SPA
+├── chat.py                  # FastAPI主入口
+├── ingest.py                # 向量库构建
+├── init.sql                 # 数据库建表
+├── dockerfile               # 🆕 集成测试
+├── docker-compose.yml
+├── requirements.txt         # 🆕 含pytest依赖
+└── README.md
 
-## 核心模块说明
-
-### 1. `agents/` — Agent 核心逻辑
-
-| 文件 | 职责 |
-|------|------|
-| `planner.py` | 决定调用哪些工具。支持规则匹配（关键词）+ LLM 混合规划，返回工具列表。 |
-| `executor.py` | 并行执行多个工具（使用 `asyncio.gather`），每个工具设置 10 秒超时，过滤 `None` 结果。 |
-| `synthesizer.py` | 综合多个工具返回的结果，进行来源标注、去重、冲突处理，调用 LLM 生成最终答案。 |
-| `llm_planner.py` | 当规则匹配结果不理想时（0 个或超过 3 个工具），调用 qwen-plus 重新生成工具列表。 |
-| `consult_graph.py` | LangGraph 智能问诊图，包含 `analyze_gap` → `ask_missing` → `execute_tools` → `synthesize` 节点。 |
-| `state.py` | LangGraph 状态定义（问题、历史、患者信息、缺失信息、工具结果、迭代次数等）。 |
-
-
-### 2. `tools/` — 工具实现
-
-| 文件 | 职责 |
-|------|------|
-| `base_tool.py` | 抽象基类。定义 `run` 接口，加载 Chroma 向量库，初始化 OpenAI 客户端，提供 `_safe_llm_call`（重试 + 降级）。 |
-| `drug_tool.py` | 检索药品说明书向量库，回答成分、适应症、副作用、用法用量等。 |
-| `guideline_tool.py` | 检索临床指南向量库，回答治疗推荐、诊疗规范等。 |
-| `literature_tool.py` | 检索医学文献向量库，回答机制研究、最新进展等。 |
-| `risk_tool.py` | 检索药物相互作用向量库，回答不良反应、禁忌症、药物冲突等。 |
-| `patient_tool.py` | 管理患者档案（记住 / 查询 / 追加），使用 MySQL 存储，支持身份证号唯一标识。 |
-| `report_tool.py` | 基于患者档案 + Word 模板生成评估表，调用 LLM 生成评估内容，返回下载链接。**同时自动创建审批项**。 |
-| `approval_tool.py` | 审批管理（创建 / 待审批列表 / 已通过 / 已驳回 / 全部列表 / 通过 / 驳回）。支持多租户隔离。 |
-| `rag_tool.py` | 通用 RAG 工具（备用），包含 query rewrite + 检索 + rerank。 |
-| `tool_registry.py` | 统一创建和管理所有工具实例，对外提供 `get_tools()` 接口。 |
-| `file_tool.py` | 页面文件上传 |
-
-
-### 3. `utils/` — 工具函数
-
-| 文件 | 职责 |
-|------|------|
-| `config.py` | 从 `.env` 读取配置（LLM 模型名、嵌入模型名等）。 |
-| `embeddings.py` | 封装 DashScope `text-embedding-v4` 模型，实现 `embed_documents` 和 `embed_query` 方法。 |
-| `response.py` | 定义 `build_response` 函数，确保所有工具返回统一的 JSON 结构（含 answer、source、debug、trace）。 |
-
-
-### 4. `static/` — 前端资源
-
-| 文件 | 职责 |
-|------|------|
-| `index.html` | 单页聊天界面，包含三个独立模块（快速问答、智能问诊、审批助手），对话历史各自隔离，侧边栏展示审批列表。 |
-
-
-### 5. 根目录关键文件
-
-| 文件 | 职责 |
-|------|------|
-| `chat.py` | FastAPI 主入口。定义 `/ask`、`/consult`、`/approvals`、`/health`、`/metrics` 等端点。集成租户中间件、身份声明、审批/患者操作拦截。 |
-| `ingest.py` | 从 `data/` 目录读取 PDF 文档，切片后存入 Chroma 向量数据库。支持分类：drug、guideline、literature、risk、rag。 |
-| `init.sql` | 数据库初始化脚本（建表 + 字段添加），MySQL 容器首次启动时自动执行。 |
-| `dockerfile` | Docker 镜像构建文件（Python 3.10-slim + 依赖安装 + 代码复制 + 启动命令）。 |
-| `docker-compose.yml` | 定义 `med_agent` 和 `mysql-patient` 两个服务，配置端口映射、环境变量、数据卷挂载。 |
-| `.env` | 环境变量（API Key、数据库密码、路径配置等），不提交 Git。 |
-| `.env.example` | 环境变量示例模板（提交 Git）。 |
-
-
-## V4.0.0 功能清单（待完成）
-| 序号 | 事项 | 功能说明 | 优先级 | 
-|------|------|----------|--------|
-| 1 | 多 Agent 协作 | Supervisor 路由 + 心内科/药剂科/全科 Agent | P0 |
-| 2 | 审批人动态配置 | 硬编码 `doctor_张` 改为可配置 | P0 |
-| 3 | L4 语义记忆 | 跨会话知识复用，相似病情自动参考历史 | P1 |
-| 4 | V4 自动化审批流 | 定时催办、超时自动通过/驳回 | P1 |
-| 5 | 单元测试 | Planner/Executor/Synthesizer 及各工具测试 | P1 |
-| 6 | 真实权限管理（RBAC） | 管理员/审批人/观察者角色体系 | P2 |
-| 7 | LLM 权限隔离 | LLM 只能处理问题，不能直接访问知识库和数据库 | P2 |
-| 8 | 多设备对话同步 | 不同设备登录看到同一对话历史 | P2 |
+# 待完善事项
+- L4语义记忆
+- 真实权限管理（RBAC）
+- LLM 权限隔离
+- 日志打印优化
+- 问答输出精简

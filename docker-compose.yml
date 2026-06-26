@@ -41,6 +41,8 @@ services:
       - LLM_PROVIDER=${LLM_PROVIDER:-dashscope}   # dashscope | ollama
       - OLLAMA_BASE_URL=http://ollama:11434/v1
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
+      - LLM_RESPONSE_MODE=${LLM_RESPONSE_MODE:-concise}
+      - LLM_RESPONSE_MAX_LENGTH=${LLM_RESPONSE_MAX_LENGTH:-300}
     volumes:
       - /mnt/d/A_Study/Agent/Med_Agent/vector_db:/app/vector_db
       - ./logs:/app/logs

@@ -37,6 +37,8 @@ class BaseTool(ABC):
         reraise=True
     )
     def _llm_call_with_retry(self, messages, temperature=0.2, model=None):
+        if model is None:
+            model = self.model   # 使用实例保存的模型
         resp = self.client.chat.completions.create(
             model=model,
             messages=messages,

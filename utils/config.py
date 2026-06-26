@@ -24,6 +24,11 @@ def get_ollama_base_url() -> str:
 def get_ollama_model() -> str:
     return os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 
+def get_response_mode() -> str:
+    return os.getenv("LLM_RESPONSE_MODE", "detailed")
+
+def get_response_max_length() -> int:
+    return int(os.getenv("LLM_RESPONSE_MAX_LENGTH", "500"))
 
 # 🆕 统一创建 OpenAI 客户端
 def get_llm_client(api_key: str = None, timeout: float = 120.0):

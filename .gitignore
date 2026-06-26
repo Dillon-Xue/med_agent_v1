@@ -36,3 +36,6 @@ htmlcov/
 # 其他
 .DS_Store
 *.swp
+
+README.md
+*.md
