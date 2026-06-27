@@ -1,10 +1,10 @@
-import os
-import time
+import os, time, logging
 from openai import OpenAI
 from langchain_chroma import Chroma
 from utils.response import build_response
 from utils.embeddings import DashscopeEmbeddings
 from utils.config import get_llm_client
+logger = logging.getLogger(__name__)
 
 class RAGTool:
     def __init__(self, base_dir: str, api_key: str):
@@ -12,7 +12,7 @@ class RAGTool:
         self.api_key = api_key
         # 🆕 使用统一客户端工厂
         self.client, self.model = get_llm_client(api_key, timeout=60.0)
-        print(f"[RAGTool] Using model: {self.model}")
+        logger.info(f"[RAGTool] Using model: {self.model}")
         self.db_path = os.path.join(base_dir, "vector_db", "rag")
         self.embeddings = DashscopeEmbeddings()
         self.vectordb = Chroma(

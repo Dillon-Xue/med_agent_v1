@@ -1,6 +1,8 @@
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
+import logging
+logger = logging.getLogger(__name__)
 
 class Executor:
     def __init__(self, tools: dict):
@@ -29,7 +31,7 @@ class Executor:
                 )
                 # 🆕 trace_callback 现在改成了同步函数，直接调用
                 if trace_callback:
-                    print(f"[Executor] 正在记录 trace: {name}")
+                    logger.debug(f"[Executor] 正在记录 trace: {name}")
                     trace_callback("executor", {
                         "tool": name,
                         "question": question,

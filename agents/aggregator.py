@@ -1,5 +1,6 @@
 from utils.config import get_llm_client, get_response_mode, get_response_max_length
-import os
+import os, logging
+logger = logging.getLogger(__name__)
 
 class Aggregator:
     def __init__(self):

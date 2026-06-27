@@ -38,7 +38,7 @@ services:
       - DB_NAME=patient_db
       - CRYPTO_KEY=${CRYPTO_KEY}
       - OLLAMA_BASE_URL=http://ollama:11434
-      - LLM_PROVIDER=${LLM_PROVIDER:-dashscope}   # dashscope | ollama
+      - LLM_PROVIDER=${LLM_PROVIDER:-dashscope}
       - OLLAMA_BASE_URL=http://ollama:11434/v1
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b}
       - LLM_RESPONSE_MODE=${LLM_RESPONSE_MODE:-concise}
@@ -67,6 +67,38 @@ services:
       - OLLAMA_KEEP_ALIVE=10m
     networks:
       - med_agent_net
+
+  # 🆕 飞书适配器服务（与 medical-agent、ollama 平级）
+  feishu-adapter:
+    image: med_agent_v1-medical-agent  # 使用同一个镜像
+    container_name: feishu_adapter
+    build: .  # 如果镜像不存在则构建
+    environment:
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-qwen-plus}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-text-embedding-v4}
+      - DB_HOST=mysql-patient
+      - DB_USER=your_app_user
+      - DB_PASSWORD=your_app_password
+      - DB_NAME=patient_db
+      - CRYPTO_KEY=${CRYPTO_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-dashscope}
+      - LLM_RESPONSE_MODE=${LLM_RESPONSE_MODE:-concise}
+      - LLM_RESPONSE_MAX_LENGTH=${LLM_RESPONSE_MAX_LENGTH:-300}
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
+    volumes:
+      - /mnt/d/A_Study/Agent/Med_Agent/vector_db:/app/vector_db
+      - ./logs:/app/logs
+      - /mnt/d/A_Study/Agent/Med_Agent/reports:/app/reports
+    depends_on:
+      mysql-patient:
+        condition: service_healthy
+    networks:
+      - med_agent_net
+    restart: unless-stopped
+    command: python feishu_adapter.py
 
 volumes:
   mysql_patient_data:

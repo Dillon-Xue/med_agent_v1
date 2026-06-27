@@ -1,6 +1,7 @@
-import os
+import os, logging
 from openai import OpenAI
 from dotenv import load_dotenv
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -37,7 +38,7 @@ def get_llm_client(api_key: str = None, timeout: float = 120.0):
     返回: (client, model_name)
     """
     provider = get_llm_provider()
-    print(f"[LLMClient] Provider: {provider}")
+    logger.info(f"[LLMClient] Provider: {provider}")
 
     if provider == "ollama":
         client = OpenAI(
@@ -46,7 +47,7 @@ def get_llm_client(api_key: str = None, timeout: float = 120.0):
             timeout=timeout
         )
         model = get_ollama_model()
-        print(f"[LLMClient] Using Ollama model: {model}")
+        logger.info(f"[LLMClient] Using Ollama model: {model}")
         return client, model
     else:
         # 默认使用 DashScope
@@ -58,5 +59,22 @@ def get_llm_client(api_key: str = None, timeout: float = 120.0):
             timeout=timeout
         )
         model = get_llm_model()
-        print(f"[LLMClient] Using DashScope model: {model}")
+        logger.info(f"[LLMClient] Using DashScope model: {model}")
         return client, model
+
+
+def get_log_level() -> str:
+    return os.getenv("LOG_LEVEL", "INFO").upper()
+
+def setup_logging():
+    """配置全局日志格式（chat.py 会调用，其他模块无需重复配置）"""
+    level = get_log_level()
+    logging.basicConfig(
+        level=getattr(logging, level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    # 设置第三方库日志级别为 WARNING，减少噪音
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)

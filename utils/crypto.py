@@ -6,7 +6,7 @@ CRYPTO_KEY = os.getenv("CRYPTO_KEY")
 if not CRYPTO_KEY:
     # 首次启动自动生成（仅开发环境）
     CRYPTO_KEY = Fernet.generate_key().decode()
-    print(f"⚠️ 请将 CRYPTO_KEY={CRYPTO_KEY} 添加到 .env")
+    logger.warning(f"⚠️ 请将 CRYPTO_KEY={CRYPTO_KEY} 添加到 .env")
     os.environ["CRYPTO_KEY"] = CRYPTO_KEY
 
 cipher = Fernet(CRYPTO_KEY.encode())

@@ -1,9 +1,10 @@
-import os
+import os, logging
 from dotenv import load_dotenv
 from tools.approval_tool import ApprovalTool
 load_dotenv()
 from tools.file_tool import FileTool
 
+logger = logging.getLogger(__name__)
 BASE_DIR = os.getenv("MED_AGENT_ROOT", os.getcwd())
 
 TOOLS = {}
@@ -38,9 +39,9 @@ def init_tools():
         "file": FileTool(api_key),
     }
 
-    print("\n========== TOOL INIT OK ==========")
+    logger.debug("\n========== TOOL INIT OK ==========")
     for k in TOOLS:
-        print(f"[tool loaded] {k}")
+        logger.info(f"[tool loaded] {k}")
 
     return TOOLS
 

@@ -2,16 +2,18 @@ from openai import OpenAI
 import os
 from utils.config import get_llm_client
 from utils.config import get_response_mode, get_response_max_length
+import logging
+logger = logging.getLogger(__name__)
 
 class Synthesizer:
     def __init__(self, api_key, specialty: str = "general"):
         self.client, self.model = get_llm_client(api_key, timeout=60.0)
         self.specialty = specialty
-        print(f"[Synthesizer] Model: {self.model}, Specialty: {self.specialty}")
+        logger.debug(f"[Synthesizer] Model: {self.model}, Specialty: {self.specialty}")
 
     def run(self, augmented_question, tool_results, trace_callback=None):
         if trace_callback:
-            print(f"[Synthesizer] 正在记录 trace")
+            logger.debug(f"[Synthesizer] 正在记录 trace")
             trace_callback("synthesizer", {
                 "question": augmented_question,
                 "tool_count": len(tool_results),
@@ -132,7 +134,7 @@ class Synthesizer:
             )
             answer = resp.choices[0].message.content
         except Exception as e:
-            print(f"[Synthesizer] LLM 调用失败: {e}")
+            logger.debug(f"[Synthesizer] LLM 调用失败: {e}")
             answer = f"【系统降级】LLM 合成失败，以下是各工具原始结果：\n\n{combined[:1000]}"
 
         if trace_callback:

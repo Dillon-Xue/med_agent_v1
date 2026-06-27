@@ -3,6 +3,8 @@ from agents.planner import Planner
 from agents.executor import Executor
 from agents.synthesizer import Synthesizer
 from tools.tool_registry import get_tools
+import logging
+logger = logging.getLogger(__name__)
 
 class SpecialtyAgent:
     def __init__(self, specialty: str, tools: dict, api_key: str):

@@ -1,8 +1,8 @@
-import os
-import re
+import os, re, logging
 from datetime import datetime
 from docx import Document
 from utils.response import build_response
+logger = logging.getLogger(__name__)
 
 class ReportTool:
     def __init__(self):
@@ -11,7 +11,7 @@ class ReportTool:
         os.makedirs(self.output_dir, exist_ok=True)
 
     def _log(self, msg):
-        print(f"[ReportTool] {msg}")
+        logger.debug(f"[ReportTool] {msg}")
 
     def run(self, query: str) -> dict:
         """统一入口：生成评估表"""
@@ -28,7 +28,7 @@ class ReportTool:
             match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:评估表|病历|档案)', clean_query)
         if match:
             patient_name = match.group(1)
-            print(f"[ReportTool] 从 query 提取患者姓名: {patient_name}")
+            logger.info(f"[ReportTool] 从 query 提取患者姓名: {patient_name}")
 
         # ---- 如果 query 中没有，再尝试从全局会话获取（兜底） ----
         if not patient_name:
@@ -36,14 +36,14 @@ class ReportTool:
                 import chat
                 if hasattr(chat, 'current_session_user') and chat.current_session_user:
                     patient_name = chat.current_session_user
-                    print(f"[ReportTool] 从会话兜底获取患者姓名: {patient_name}")
+                    logger.info(f"[ReportTool] 从会话兜底获取患者姓名: {patient_name}")
             except Exception as e:
-                print(f"[ReportTool] 会话兜底失败: {e}")
+                logger.error(f"[ReportTool] 会话兜底失败: {e}")
 
         # ---- 如果提取到的姓名是无效值，过滤掉 ----
         invalid_names = ["患者信息", "患者", "信息", "评估表", "生成评估表", "生成报告", "生成档案", "生成病历"]
         if patient_name in invalid_names:
-            print(f"[ReportTool] 提取到无效姓名 '{patient_name}'，设为空")
+            logger.warning(f"[ReportTool] 提取到无效姓名 '{patient_name}'，设为空")
             patient_name = None
 
         # ---- 如果还是没有，返回错误 ----
@@ -118,7 +118,7 @@ class ReportTool:
 
         # 🆕 如果结构化字段都为空，降级用正则解析 info（兼容旧数据）
         if not info_dict["性别"] and not info_dict["年龄"] and not info_dict["联系方式"]:
-            print(f"[ReportTool] 结构化字段为空，降级使用正则解析 info")
+            logger.warning(f"[ReportTool] 结构化字段为空，降级使用正则解析 info")
             info_dict = self._parse_patient_info(
                 candidate.get("info", ""),
                 candidate.get("diagnosis", "")
@@ -131,7 +131,7 @@ class ReportTool:
             if not info_dict["主要问题"] and info_dict.get("临床诊断"):
                 info_dict["主要问题"] = info_dict["临床诊断"]
 
-        print(f"[ReportTool] 最终 info_dict: {info_dict}")
+        logger.info(f"[ReportTool] 最终 info_dict: {info_dict}")
 
         if info_dict.get("家庭住址"):
             info_dict["家庭住址"] = self._complete_address(info_dict["家庭住址"])
@@ -178,9 +178,9 @@ class ReportTool:
                 requester=requester,
                 reviewer=reviewer
             )
-            print(f"[ReportTool] 已自动创建审批项（审批人：{reviewer}）")
+            logger.info(f"[ReportTool] 已自动创建审批项（审批人：{reviewer}）")
         except Exception as e:
-            print(f"[ReportTool] 创建审批项失败: {e}")
+            logger.error(f"[ReportTool] 创建审批项失败: {e}")
             # 不影响主流程，继续返回下载链接
 
         return build_response(
@@ -219,7 +219,7 @@ class ReportTool:
             if full_address:
                 return full_address
         except Exception as e:
-            print(f"[ReportTool] 地址补全失败: {e}")
+            logger.error(f"[ReportTool] 地址补全失败: {e}")
         return address
 
     def _get_drug_suggestion(self, name: str, info: dict) -> str:
@@ -234,7 +234,7 @@ class ReportTool:
             if result and isinstance(result, dict):
                 return result.get("answer", "")
         except Exception as e:
-            print(f"[ReportTool] 调用 drug tool 失败: {e}")
+            logger.error(f"[ReportTool] 调用 drug tool 失败: {e}")
         return ""
 
     def _parse_patient_info(self, text: str, diagnosis: str = "", 

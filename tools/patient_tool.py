@@ -1,13 +1,10 @@
-import os
-import re
-import json
-import pymysql
-import time
+import os, re, json, pymysql, time, logging
 from utils.response import build_response
 from openai import OpenAI
 from utils.audit import log_audit
 from utils.crypto import encrypt_if_needed, decrypt_if_needed
 from utils.config import get_llm_client
+logger = logging.getLogger(__name__)
 
 class PatientTool:
     def __init__(self):
@@ -18,7 +15,7 @@ class PatientTool:
         self.api_key = os.getenv("DASHSCOPE_API_KEY")
         # 🆕 使用统一客户端工厂
         self.client, self.model = get_llm_client(self.api_key)
-        print(f"[PatientTool] Using model: {self.model}")
+        logger.info(f"[PatientTool] Using model: {self.model}")
         self._init_db()
 
     def _get_connection(self):
@@ -142,7 +139,7 @@ class PatientTool:
             if row:
                 # 如果原有 id_card 为空，可以更新；否则可能是不同患者
                 if not row[3]:  # id_card 为空
-                    print(f"[PatientTool] 找到同名患者 {name}，原有 id_card 为空，将更新此记录")
+                    logger.info(f"[PatientTool] 找到同名患者 {name}，原有 id_card 为空，将更新此记录")
                     return {
                         "name": row[0],
                         "gender": row[1] or "",
@@ -158,7 +155,7 @@ class PatientTool:
                         "doctor_id": row[11] or ""
                     }
                 else:
-                    print(f"[PatientTool] 警告：已存在同名患者 {name} 但 id_card 不同 ({row[3]})，请确认是否为同一人")
+                    logger.warning(f"[PatientTool] 警告：已存在同名患者 {name} 但 id_card 不同 ({row[3]})，请确认是否为同一人")
                     # 仍然返回，让调用方决定
                     return {
                         "name": row[0],
@@ -231,11 +228,9 @@ class PatientTool:
         """
         保存患者信息（结构化字段 + 唯一确认）
         """
-        print(f"[PatientTool.remember] 开始执行")
-        print(f"[PatientTool.remember] name: {name}, id_card: {id_card}")
-        print(f"[PatientTool.remember] 传入的 info: {info[:100] if info else 'None'}...")
-        print(f"[PatientTool.remember] 结构化参数: gender={gender}, age={age}, phone={phone}, address={address}")
-        print(f"[PatientTool.remember] 结构化参数: allergy={allergy}, medication={medication}, symptoms={symptoms}, diagnosis={diagnosis}")
+        logger.info(f"[PatientTool.remember] name: {name}, id_card: {id_card}")
+        logger.debug(f"[PatientTool.remember] 传入的 info: {info[:100] if info else 'None'}...")
+        logger.info(f"[PatientTool.remember] 结构化参数: gender={gender}, age={age}, phone={phone}, address={address},  allergy={allergy}, medication={medication}, symptoms={symptoms}, diagnosis={diagnosis}")
 
         name = name.strip()
         tenant_id = self._get_tenant()
@@ -244,13 +239,13 @@ class PatientTool:
         # 🆕 对敏感字段加密
         id_card_encrypted = encrypt_if_needed(id_card) if id_card else None
         phone_encrypted = encrypt_if_needed(phone) if phone else None
-        print(f"[PatientTool.remember] tenant_id: {tenant_id}, doctor_id: {doctor_id}")
+        logger.info(f"[PatientTool.remember] tenant_id: {tenant_id}, doctor_id: {doctor_id}")
 
         # ===== 🆕 如果结构化字段为空，用 LLM 从 info 中解析 =====
         if info and not any([gender, age, phone, address, allergy, medication, symptoms, diagnosis, id_card]):
-            print(f"[PatientTool.remember] 结构化字段为空，调用 LLM 解析 info")
+            logger.debug(f"[PatientTool.remember] 结构化字段为空，调用 LLM 解析 info")
             parsed = self._parse_info_with_llm(info)
-            print(f"[PatientTool.remember] LLM 解析结果: {parsed}")
+            logger.info(f"[PatientTool.remember] LLM 解析结果: {parsed}")
             
             if parsed.get("gender"): gender = parsed["gender"]
             if parsed.get("age"): age = parsed["age"]
@@ -267,7 +262,7 @@ class PatientTool:
         
         # 如果没有身份证号，提示
         if not id_card:
-            print("[PatientTool.remember] 警告：未提供身份证号，仅使用姓名匹配")
+            logger.warning("[PatientTool.remember] 警告：未提供身份证号，仅使用姓名匹配")
         
         # 组装 info（便于显示）
         info_parts = []
@@ -344,7 +339,7 @@ class PatientTool:
                         final_symptoms, final_diagnosis, final_info, 
                         name, tenant_id, doctor_id)
             cursor.execute(sql, params)
-            print(f"[PatientTool.remember] 更新影响行数: {cursor.rowcount}")
+            logger.debug(f"[PatientTool.remember] 更新影响行数: {cursor.rowcount}")
             action = "更新"
         else:
             # 🆕 插入新记录（使用原始字段，不是 final_*）
@@ -357,12 +352,12 @@ class PatientTool:
                     address, allergy, medication, symptoms, diagnosis, 
                     new_info, tenant_id, doctor_id)
             cursor.execute(sql, params)
-            print(f"[PatientTool.remember] 插入影响行数: {cursor.rowcount}")
+            logger.info(f"[PatientTool.remember] 插入影响行数: {cursor.rowcount}")
             action = "新建"
 
         conn.commit()
         conn.close()
-        print(f"[PatientTool.remember] 操作完成，action={action}")
+        logger.info(f"[PatientTool.remember] 操作完成，action={action}")
 
         # 🆕 构建返回数据（解密后返回给用户）
         if existing:
@@ -504,8 +499,8 @@ class PatientTool:
         """
         使用 LLM 提取患者操作信息和结构化字段
         """
-        print(f"[PatientTool] ==== _llm_extract 开始 ====")
-        print(f"[PatientTool._llm_extract] 原始输入: {query}")
+        logger.debug(f"[PatientTool] ==== _llm_extract 开始 ====")
+        logger.info(f"[PatientTool._llm_extract] 原始输入: {query}")
         try:
             prompt = f"""
     请从以下用户输入中提取患者操作信息，返回 JSON 格式。
@@ -533,32 +528,32 @@ class PatientTool:
     输出必须为 JSON 格式，如：
     {{"action": "remember", "name": "张三", "gender": "女", "age": "20岁", "phone": "", "address": "", "allergy": "", "medication": "", "symptoms": "", "diagnosis": "", "id_card": "", "info": ""}}
     """
-            print(f"[PatientTool._llm_extract] 发送 prompt:\n{prompt}")
+            logger.info(f"[PatientTool._llm_extract] 发送 prompt:\n{prompt}")
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
             content = resp.choices[0].message.content.strip()
-            print(f"[PatientTool._llm_extract] LLM 原始返回: {content}")
+            logger.info(f"[PatientTool._llm_extract] LLM 原始返回: {content}")
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0]
             data = json.loads(content)
-            print(f"[PatientTool._llm_extract] 解析后的 JSON: {data}")
-            print(f"[PatientTool] ==== _llm_extract 结束 ====")
+            logger.info(f"[PatientTool._llm_extract] 解析后的 JSON: {data}")
+            logger.debug(f"[PatientTool] ==== _llm_extract 结束 ====")
             return data
         except Exception as e:
-            print(f"[PatientTool._llm_extract] LLM 提取失败: {e}")
+            logger.error(f"[PatientTool._llm_extract] LLM 提取失败: {e}")
             import traceback
             traceback.print_exc()
             return {"action": "unknown", "name": "", "info": ""}
 
     def run(self, query: str) -> dict:
         """统一入口"""
-        print(f"[PatientTool] ==== run 开始 ====")
-        print(f"[PatientTool] 原始 query: {query}")
+        logger.info(f"[PatientTool] ==== run 开始 ====")
+        logger.info(f"[PatientTool] 原始 query: {query}")
         # 身份证号检测
         id_match = re.fullmatch(r'\s*(\d{17}[\dXx])\s*', query)
         if id_match:
@@ -571,7 +566,7 @@ class PatientTool:
 
         # 🆕 使用 LLM 提取结构化数据
         extracted = self._llm_extract(query)
-        print(f"[PatientTool] LLM 提取结果: {extracted}")
+        logger.info(f"[PatientTool] LLM 提取结果: {extracted}")
         
         action = extracted.get("action", "unknown")
         name = extracted.get("name", "").strip()
@@ -695,8 +690,8 @@ class PatientTool:
         """
         使用 LLM 从 info 文本中提取结构化字段
         """
-        print(f"[PatientTool] ==== _parse_info_with_llm 开始 ====")
-        print(f"[PatientTool] 待解析的 info: {info}")
+        logger.info(f"[PatientTool] ==== _parse_info_with_llm 开始 ====")
+        logger.info(f"[PatientTool] 待解析的 info: {info}")
         
         try:
             prompt = f"""
@@ -724,7 +719,7 @@ class PatientTool:
     示例输出：
     {{"gender": "男", "age": "35岁", "phone": "17688909987", "address": "杭州市", "allergy": "无", "medication": "布洛芬", "symptoms": "肚子痛", "diagnosis": "", "id_card": ""}}
     """
-            print(f"[PatientTool] 发送给 LLM 的 prompt:\n{prompt}")
+            logger.debug(f"[PatientTool] 发送给 LLM 的 prompt:\n{prompt}")
             
             resp = self.client.chat.completions.create(
                 model=self.model,
@@ -732,7 +727,7 @@ class PatientTool:
                 temperature=0
             )
             content = resp.choices[0].message.content.strip()
-            print(f"[PatientTool] LLM 原始返回: {content}")
+            logger.info(f"[PatientTool] LLM 原始返回: {content}")
             
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
@@ -740,11 +735,11 @@ class PatientTool:
                 content = content.split("```")[1].split("```")[0]
             
             data = json.loads(content)
-            print(f"[PatientTool] 解析后的 JSON: {data}")
+            logger.debug(f"[PatientTool] 解析后的 JSON: {data}")
             return data
             
         except Exception as e:
-            print(f"[PatientTool] LLM 解析失败: {e}")
+            logger.debug(f"[PatientTool] LLM 解析失败: {e}")
             import traceback
             traceback.print_exc()
             return {}

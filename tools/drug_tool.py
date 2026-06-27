@@ -1,14 +1,15 @@
 from tools.base_tool import BaseTool
 from utils.response import build_response
 from utils.embeddings import DashscopeEmbeddings
-import time
+import time, logging
+logger = logging.getLogger(__name__)
 
 class DrugTool(BaseTool):
     def __init__(self, base_dir, api_key):
         super().__init__(base_dir, "drug", api_key)
         self.embeddings = DashscopeEmbeddings()
         self.load_db(self.embeddings)
-        print("VECTOR READ PATH:", self.db_path)
+        logger.debug(f"VECTOR READ PATH: {self.db_path}")
         self._trace = []
 
     def trace(self, stage: str, data: dict):

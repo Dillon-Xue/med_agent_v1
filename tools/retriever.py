@@ -4,13 +4,15 @@ from typing import List, Tuple
 from rank_bm25 import BM25Okapi
 from openai import OpenAI
 from utils.config import get_llm_client
+import logging
+logger = logging.getLogger(__name__)
 
 class HybridRetriever:
     def __init__(self, vectordb):
         self.vectordb = vectordb
         # 🆕 使用统一客户端工厂
         self.client, self.model = get_llm_client()
-        print(f"[HybridRetriever] Using model: {self.model}")
+        logger.debug(f"[HybridRetriever] Using model: {self.model}")
 
     def query_rewrite(self, query: str) -> List[str]:
         """用 LLM 生成 2-3 个不同角度的查询"""
@@ -33,7 +35,7 @@ class HybridRetriever:
             all_queries = [query] + [q for q in queries if q != query]
             return all_queries[:3]
         except Exception as e:
-            print(f"[Retriever] 查询改写失败: {e}")
+            logger.info(f"[Retriever] 查询改写失败: {e}")
             return [query]
 
     def _tokenize(self, text: str) -> List[str]:
@@ -76,9 +78,8 @@ class HybridRetriever:
         return merged[:top_k]
 
     def retrieve(self, query: str, k: int = 10, trace_callback=None) -> List[Tuple]:
-        print(f"[Retriever] 查询改写输入: {query}")
         queries = self.query_rewrite(query)
-        print(f"[Retriever] 改写后的查询: {queries}")
+        logger.debug(f"[Retriever] 改写后的查询: {queries}")
 
         if trace_callback:
             trace_callback("retriever", {"query": query, "rewritten_queries": queries})
@@ -96,7 +97,7 @@ class HybridRetriever:
                 if doc_id not in all_docs or score_val < all_docs[doc_id][1]:
                     all_docs[doc_id] = (doc, score_val)
 
-        print(f"[Retriever] 向量检索去重后: {len(all_docs)} 条")
+        logger.debug(f"[Retriever] 向量检索去重后: {len(all_docs)} 条")
 
         if len(all_docs) < k:
             docs = self.vectordb.similarity_search_with_score(query, k=k*2)
@@ -162,5 +163,5 @@ class HybridRetriever:
 
             return [docs[i] for i in unique_indices]
         except Exception as e:
-            print(f"[Retriever] LLM 重排序失败: {e}")
+            logger.WARNING(f"[Retriever] LLM 重排序失败: {e}")
             return docs[:top_k]

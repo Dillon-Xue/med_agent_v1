@@ -1,12 +1,11 @@
-import os
-import base64
-import tempfile
+import os, base64, tempfile, logging
 from typing import Optional
 from openai import OpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from docx import Document
 from openpyxl import load_workbook
 from utils.config import get_llm_client
+logger = logging.getLogger(__name__)
 
 class FileTool:
     """文件解析工具：支持图片（PNG/JPG）和 PDF 的内容提取"""
@@ -14,7 +13,7 @@ class FileTool:
     def __init__(self, api_key: str):
         # 🆕 使用统一客户端工厂
         self.client, self.model = get_llm_client(api_key)
-        print(f"[FileTool] Using model: {self.model}")
+        logger.info(f"[FileTool] Using model: {self.model}")
 
     def parse_image(self, file_content: bytes, filename: str) -> str:
         """

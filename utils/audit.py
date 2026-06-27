@@ -1,6 +1,4 @@
-import os
-import json
-import pymysql
+import os, json, pymysql, logging
 from datetime import datetime
 
 
@@ -38,7 +36,7 @@ def log_audit(action: str, resource_type: str, resource_id: str = None,
         detail: 操作详情（会脱敏）
         ip: 客户端IP
     """
-    print(f"[Audit] 被调用: {action} {resource_type} {resource_id}")  # 🆕 加这行
+    logger.debug(f"[Audit] 被调用: {action} {resource_type} {resource_id}")  # 🆕 加这行
     try:
         # 导入脱敏函数
         from utils.response import mask_sensitive
@@ -73,6 +71,6 @@ def log_audit(action: str, resource_type: str, resource_id: str = None,
         )
         conn.commit()
         conn.close()
-        print(f"[Audit] {action} | {resource_type} | {resource_id} | {user_id}")
+        logger.debug(f"[Audit] {action} | {resource_type} | {resource_id} | {user_id}")
     except Exception as e:
-        print(f"[Audit] 记录失败: {e}")
+        logger.error(f"[Audit] 记录失败: {e}")

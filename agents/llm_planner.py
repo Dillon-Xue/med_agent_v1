@@ -1,12 +1,15 @@
-import json
+import json, logging
 from openai import OpenAI
 from utils.config import get_llm_client
+
+logger = logging.getLogger(__name__)
+
 
 class LLMPlanner:
     def __init__(self, api_key):
         # 🆕 使用统一客户端工厂
         self.client, self.model = get_llm_client(api_key)
-        print(f"[LLMPlanner] Using model: {self.model}")
+        logger.debug(f"[LLMPlanner] Using model: {self.model}")
 
     def select_tools(self, question: str) -> list:
         tools_desc = {
@@ -30,5 +33,5 @@ class LLMPlanner:
             if isinstance(tools, list) and all(isinstance(t, str) for t in tools):
                 return tools
         except Exception as e:
-            print(f"[LLMPlanner] error: {e}")
+            logger.error(f"[LLMPlanner] error: {e}")
         return ["drug", "guideline", "literature", "risk"]  # fallback

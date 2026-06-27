@@ -17,6 +17,9 @@ from utils.audit import log_audit
 from agents.supervisor import Supervisor  
 from agents.agent_factory import get_agent
 from agents.aggregator import Aggregator
+from utils.config import setup_logging
+logger = logging.getLogger(__name__)
+
 
 # =========================
 # Trace 存储（内存）
@@ -30,6 +33,7 @@ trace_lock = asyncio.Lock()
 LOG_FILE = "logs/app.log"
 os.makedirs("logs", exist_ok=True)
 
+setup_logging()
 logger = logging.getLogger("med_agent")
 logger.setLevel(logging.INFO)
 
@@ -218,7 +222,37 @@ def get_cache_key(question: str) -> str:
 # 核心问答逻辑
 # =========================
 async def process_question(question: str, history: list, trace_callback=None) -> dict:
-    print(f"[process_question] 收到的 trace_callback 是否为 None: {trace_callback is None}")
+    logger.info(f"[process_question] 收到的 trace_callback 是否为 None: {trace_callback is None}")
+    
+    def _is_topic_shift(current_q: str, history: list) -> bool:
+        """检测是否发生话题切换"""
+        if not history:
+            return False
+
+        import re
+        # 提取当前问题中的关键词（2-6个中文字符）
+        current_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,6}', current_q))
+        
+        # 从历史中提取关键词（最近 3 轮用户消息）
+        user_messages = [msg["content"] for msg in history[-6:] if msg.get("role") == "user"]
+        if not user_messages:
+            return False
+        
+        history_keywords = set()
+        for msg in user_messages:
+            history_keywords.update(re.findall(r'[\u4e00-\u9fa5]{2,6}', msg))
+        
+        if not history_keywords or not current_keywords:
+            return False
+        
+        overlap = len(current_keywords & history_keywords)
+        overlap_rate = overlap / len(current_keywords)
+        
+        is_shift = overlap_rate < 0.3
+        if is_shift:
+            logger.info(f"[话题切换] 重叠度 {overlap_rate:.2%}，截断历史")
+        return is_shift
+    
     """执行完整的问答流程（不含拦截）"""
     stripped = question.strip()
     greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "你好呀"]
@@ -236,6 +270,12 @@ async def process_question(question: str, history: list, trace_callback=None) ->
 
     # 构建上下文（历史 + 患者档案预加载）
     if history:
+        # ===== 🆕 话题切换检测（放在最前面，直接处理 history） =====
+        if _is_topic_shift(question, history):
+            # 话题切换，仅保留最近 2 条
+            history = []
+            logger.info(f"[话题切换] 检测到切换，清空历史")
+        
         recent = history[-5:]
         filtered = []
         for msg in recent:
@@ -372,9 +412,9 @@ def save_conversation(session_id: str, role: str, content: str,
 )
 async def ask(req: ChatRequest, request: Request):
     import re 
-    print(f"[ASK] ==== 请求开始 ====")
-    print(f"[ASK] 所有 headers: {request.headers}")
-    print(f"[ASK] X-Trace-ID: {request.headers.get('X-Trace-ID')}")
+    logger.info(f"[ASK] ==== 请求开始 ====")
+    logger.error(f"[ASK] 所有 headers: {request.headers}")
+    logger.info(f"[ASK] X-Trace-ID: {request.headers.get('X-Trace-ID')}")
     global current_session_user
     question = req.question.strip()
     history = req.history
@@ -423,12 +463,12 @@ async def ask(req: ChatRequest, request: Request):
     # 2. 审批指令拦截（不经过 process_question）
     approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
     if any(kw in question for kw in approval_keywords):
-        print(f"[Chat] 拦截到审批指令，直接处理: {question}")
+        logger.warning(f"[Chat] 拦截到审批指令，直接处理: {question}")
 
         # 获取会话信息
         session_id = request.headers.get("X-Session-ID")
         conv_type = request.headers.get("X-Conversation-Type", "unknown")
-        print(f"[Chat] 审批拦截 - session_id: {session_id}, conv_type: {conv_type}")
+        logger.warning(f"[Chat] 审批拦截 - session_id: {session_id}, conv_type: {conv_type}")
 
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
@@ -463,22 +503,22 @@ async def ask(req: ChatRequest, request: Request):
                         ip=request.client.host
                     )
         except Exception as e:
-            print(f"[Audit] 审批日志记录失败: {e}")
+            logger.error(f"[Audit] 审批日志记录失败: {e}")
 
         # 🆕 保存审批助手的对话记录
         if session_id:
-            print("[Chat] 审批拦截 - 开始保存对话")
+            logger.debug("[Chat] 审批拦截 - 开始保存对话")
             try:
                 save_conversation(session_id, "user", question,
                                 conversation_type="approval")
                 answer = result.get("answer", "")
                 save_conversation(session_id, "assistant", answer,
                                 conversation_type="approval")
-                print("[Chat] 审批拦截 - 保存完成")
+                logger.debug("[Chat] 审批拦截 - 保存完成")
             except Exception as e:
-                print(f"[Chat] 审批拦截 - 保存失败: {e}")
+                logger.error(f"[Chat] 审批拦截 - 保存失败: {e}")
         else:
-            print("[Chat] 审批拦截 - session_id 为空，跳过保存")
+            logger.warning("[Chat] 审批拦截 - session_id 为空，跳过保存")
         return {
             "success": True,
             "result": {
@@ -492,7 +532,7 @@ async def ask(req: ChatRequest, request: Request):
 
     # 3. 患者操作拦截
     if re.search(r'记住患者|记录患者|追加患者|补充患者', question, re.IGNORECASE):
-        print(f"[Chat] 拦截到患者操作: {question}")
+        logger.info(f"[Chat] 拦截到患者操作: {question}")
         from tools.patient_tool import PatientTool
         patient_tool = PatientTool()
         # 直接解析
@@ -526,24 +566,24 @@ async def ask(req: ChatRequest, request: Request):
     # 4. 正常问答（走缓存 + process_question） 
     cache_key = get_cache_key(question)
     trace_id = request.headers.get("X-Trace-ID") or request.headers.get("x-trace-id")  # 前端生成的 trace_session_id
-    print(f"[Trace] 收到 trace_id: {trace_id}")
+    logger.info(f"[Trace] 收到 trace_id: {trace_id}")
     
     # 🆕 定义 trace_callback 函数
     def trace_callback(step_type: str, data: dict):
-        print(f"[Trace] 收到 step: {step_type}, data: {data}")
+        logger.info(f"[Trace] 收到 step: {step_type}, data: {data}")
         if not trace_id:
             return
         try:
-            print(f"[Trace] 正在记录 step: {step_type}")
+            logger.info(f"[Trace] 正在记录 step: {step_type}")
             if trace_id in trace_store:
                 trace_store[trace_id]["steps"].append({
                     "step_type": step_type,
                     "timestamp": time.time(),
                     "data": data
                 })
-            print(f"[Trace] step 记录完成: {step_type}")
+            logger.info(f"[Trace] step 记录完成: {step_type}")
         except Exception as e:
-            print(f"[Trace] 回调失败: {e}")
+            logger.error(f"[Trace] 回调失败: {e}")
 
     # 🆕 启动 trace
     if trace_id:
@@ -554,9 +594,9 @@ async def ask(req: ChatRequest, request: Request):
                     json={"session_id": trace_id, "question": question},
                     timeout=2.0
                 )
-            print(f"[Trace] 启动成功: {trace_id}")
+            logger.debug(f"[Trace] 启动成功: {trace_id}")
         except Exception as e:
-            print(f"[Trace] 启动失败: {e}")
+            logger.error(f"[Trace] 启动失败: {e}")
 
     # ===== 执行问答，获取 result =====
     result = None
@@ -576,7 +616,7 @@ async def ask(req: ChatRequest, request: Request):
                             "data": {"status": "hit", "question": question}
                         })
                 except Exception as e:
-                    print(f"[Trace] 缓存命中记录失败: {e}")
+                    logger.error(f"[Trace] 缓存命中记录失败: {e}")
         else:
             logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{question}")
             result = await process_question(question, history, trace_callback=trace_callback if trace_id else None)
@@ -662,7 +702,7 @@ async def consult(req: ChatRequest, request: Request):
 
     # 患者操作拦截
     if re.search(r'记住患者|记录患者|追加患者|补充患者', question, re.IGNORECASE):
-        print(f"[Consult] 拦截到患者操作: {question}")
+        logger.info(f"[Consult] 拦截到患者操作: {question}")
         from tools.patient_tool import PatientTool
         patient_tool = PatientTool()
         name_match = re.search(r'(?:记住患者|记录患者|追加患者|补充患者)\s*([\u4e00-\u9fa5]{2,4})\s*[:：]?\s*(.+)', question)
@@ -695,7 +735,7 @@ async def consult(req: ChatRequest, request: Request):
     # 审批指令拦截
     approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
     if any(kw in question for kw in approval_keywords):
-        print(f"[Consult] 拦截到审批指令: {question}")
+        logger.info(f"[Consult] 拦截到审批指令: {question}")
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
         result = approval_tool.run(question)
@@ -721,7 +761,7 @@ async def consult(req: ChatRequest, request: Request):
         }
 
     # 正常进入 LangGraph 问诊
-    print(f"[Consult] 正常进入 LangGraph 问诊流程")
+    logger.info(f"[Consult] 正常进入 LangGraph 问诊流程")
     try:
         answer = consult_graph.run(question, history)
         session_id = request.headers.get("X-Session-ID")
@@ -770,15 +810,15 @@ async def get_approvals():
     from tools.tool_registry import get_tools
     from chat import current_session_user
 
-    print(f"[DEBUG] /approvals - current_session_user: {current_session_user}")
+    logger.debug(f"[DEBUG] /approvals - current_session_user: {current_session_user}")
     user = current_session_user if current_session_user else "current_user"
-    print(f"[DEBUG] /approvals - 查询用户: {user}")
+    logger.debug(f"[DEBUG] /approvals - 查询用户: {user}")
 
     tools = get_tools()
     approval_tool = tools.get("approval")
     if approval_tool:
         items = approval_tool.list_pending_by_user(user)
-        print(f"[DEBUG] /approvals - 查询到 {len(items)} 条记录")
+        logger.debug(f"[DEBUG] /approvals - 查询到 {len(items)} 条记录")
         return {"count": len(items), "items": items}
     return {"count": 0, "items": []}
 

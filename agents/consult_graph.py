@@ -1,9 +1,4 @@
-import os
-import re
-import json
-import asyncio
-import concurrent.futures
-import traceback
+import os, re, json, asyncio, concurrent.futures, traceback, logging
 from langgraph.graph import StateGraph, END
 from agents.state import AgentState
 from agents.planner import Planner
@@ -13,6 +8,8 @@ from tools.tool_registry import get_tools
 from openai import OpenAI
 from utils.response import mask_sensitive, mask_dict_sensitive
 from utils.config import get_llm_client
+
+logger = logging.getLogger(__name__)
 
 # 全局调试开关
 DEBUG = True
@@ -26,7 +23,7 @@ class ConsultGraph:
         self.synthesizer = Synthesizer(api_key=os.getenv("DASHSCOPE_API_KEY"))
         # 🆕 使用统一客户端工厂
         self.client, self.model = get_llm_client(os.getenv("DASHSCOPE_API_KEY"))
-        print(f"[ConsultGraph] Using model: {self.model}")
+        logger.debug(f"[ConsultGraph] Using model: {self.model}")
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -64,7 +61,7 @@ class ConsultGraph:
                     masked_args.append(mask_sensitive(arg))
                 else:
                     masked_args.append(arg)
-            print("[DEBUG]", *masked_args, **kwargs)
+            logger.debug("[DEBUG]", *masked_args, **kwargs)
 
     def _extract_info_from_text(self, text: str) -> dict:
         """使用 LLM 从文本中提取结构化患者信息，并用正则做补充提取"""
@@ -116,27 +113,27 @@ class ConsultGraph:
                 raw = data.get(val)
                 result[key] = str(raw) if raw is not None else None
             
-            print(f"[ConsultGraph] LLM 提取结果:{mask_sensitive(result)}")
+            logger.info(f"[ConsultGraph] LLM 提取结果:{mask_sensitive(result)}")
             
         except Exception as e:
-            print(f"[ConsultGraph] LLM 提取失败，降级到正则: {e}")
+            logger.error(f"[ConsultGraph] LLM 提取失败，降级到正则: {e}")
         
         # 正则补充提取（合并结果）
         regex_result = self._extract_info_with_regex(text)
-        print(f"[ConsultGraph] 正则补充提取结果: {mask_sensitive(regex_result)}")
+        logger.debug(f"[ConsultGraph] 正则补充提取结果: {mask_sensitive(regex_result)}")
         
         # 合并：如果 LLM 提取的字段为空，用正则的结果补充
         for key in ["姓名", "年龄", "过敏史", "用药史", "id_card", "性别", "家庭住址", "联系方式"]:
             if not result.get(key) and regex_result.get(key):
                 result[key] = regex_result[key]
         
-        print(f"[ConsultGraph] 最终提取结果: {mask_sensitive(result)}")
+        logger.info(f"[ConsultGraph] 最终提取结果: {mask_sensitive(result)}")
         return result
 
     def _extract_info_with_regex(self, text: str) -> dict:
         """降级方案：使用正则提取（支持表格格式）"""
-        print(f"[DEBUG] _extract_info_with_regex 被调用，text 长度: {len(text)}")
-        print(f"[DEBUG] text 内容:\n{text[:500]}")
+        logger.debug(f"[DEBUG] _extract_info_with_regex 被调用，text 长度: {len(text)}")
+        logger.debug(f"[DEBUG] text 内容:\n{text[:500]}")
         info = {
             "姓名": None, "年龄": None, "过敏史": None, "用药史": None, "id_card": None,
             "性别": None, "家庭住址": None, "联系方式": None
@@ -376,11 +373,11 @@ class ConsultGraph:
                     tool_question = f"{keyword} {extracted_name}"
                 else:
                     tool_question = f"{original_question} {extracted_name}"
-                print(f"[ConsultGraph] 为 report 工具构建专用问题: {tool_question}")
+                logger.debug(f"[ConsultGraph] 为 report 工具构建专用问题: {tool_question}")
             else:
                 # 如果没有提取到姓名，使用原始问题（让 report_tool 自己处理）
                 tool_question = original_question
-                print(f"[ConsultGraph] 未提取到姓名，使用原始问题: {tool_question}")
+                logger.debug(f"[ConsultGraph] 未提取到姓名，使用原始问题: {tool_question}")
         else:
             tool_question = enhanced
 
@@ -392,7 +389,7 @@ class ConsultGraph:
         except RuntimeError:
             results = asyncio.run(self.executor.run(tool_list, tool_question))
         except Exception as e:
-            print("[ConsultGraph] 执行工具出错:", e)
+            logger.error("[ConsultGraph] 执行工具出错:", e)
             results = []
 
         if not isinstance(results, list):
@@ -431,13 +428,13 @@ class ConsultGraph:
                 print(f"[ConsultGraph] 同步患者姓名失败: {e}")
         """
 
-        print(f"[ConsultGraph._synthesize] 开始执行")
+        logger.debug(f"[ConsultGraph._synthesize] 开始执行")
         results = state.get("tool_results", [])
         if not isinstance(results, list):
             results = []
 
         answer = self.synthesizer.run(question, results)
-        print(f"[ConsultGraph._synthesize] 合成答案完成")
+        prilogger.debugnt(f"[ConsultGraph._synthesize] 合成答案完成")
 
         state["final_answer"] = answer
         return state
@@ -613,6 +610,6 @@ class ConsultGraph:
             result = self.graph.invoke(initial_state)
             return result.get("final_answer", "未能生成回答")
         except Exception as e:
-            print("ConsultGraph 运行异常:")
+            logger.error("ConsultGraph 运行异常:")
             traceback.print_exc()
             return "问诊过程出错：" + str(e)

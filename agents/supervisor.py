@@ -1,13 +1,12 @@
 from fastapi import FastAPI
 from openai import OpenAI
 from dotenv import load_dotenv
-import os
+import os, logging
 from utils.config import get_llm_client  # 🆕 导入统一客户端工厂
 
+logger = logging.getLogger(__name__)
 load_dotenv()
-
 app = FastAPI()
-
 
 class Supervisor:
     def __init__(self):
@@ -15,7 +14,7 @@ class Supervisor:
         # 🆕 使用 get_llm_client 创建客户端
         api_key = os.getenv("DASHSCOPE_API_KEY")
         self.client, self.model = get_llm_client(api_key)
-        print(f"[Supervisor] Using model: {self.model}")
+        logger.info(f"[Supervisor] Using model: {self.model}")
 
     def route(self, question: str) -> dict:
         prompt = f"""
@@ -51,7 +50,7 @@ class Supervisor:
             secondary = [s for s in secondary if s != primary]
             return {"primary": primary, "secondary": secondary}
         except Exception as e:
-            print(f"[Supervisor] Route failed: {e}")
+            logger.error(f"[Supervisor] Route failed: {e}")
             return {"primary": "general", "secondary": []}
 
 

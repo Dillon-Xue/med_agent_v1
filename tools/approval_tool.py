@@ -1,8 +1,7 @@
-import os
-import re
-import pymysql
+import os, re, pymysql, logging
 from utils.response import build_response
 from utils.crypto import encrypt_if_needed, decrypt_if_needed
+logger = logging.getLogger(__name__)
 
 class ApprovalTool:
     def __init__(self):
@@ -42,14 +41,14 @@ class ApprovalTool:
         try:
             import chat
             if hasattr(chat, 'current_session_user') and chat.current_session_user:
-                print(f"[ApprovalTool] 从 chat 全局变量获取用户: {chat.current_session_user}")
+                logger.info(f"[ApprovalTool] 从 chat 全局变量获取用户: {chat.current_session_user}")
                 return chat.current_session_user
         except ImportError:
             pass
         # 从 query 中提取（备用）
         match = re.search(r'用户[：:]\s*(\S+)', query)
         if match:
-            print(f"[ApprovalTool] 从 query 解析用户: {match.group(1)}")
+            logger.info(f"[ApprovalTool] 从 query 解析用户: {match.group(1)}")
             return match.group(1)
         return "current_user"
 
@@ -76,7 +75,7 @@ class ApprovalTool:
         )
 
     def list_pending_by_user(self, user: str) -> list:
-        print(f"[ApprovalTool.list_pending_by_user] user: {user}")
+        logger.info(f"[ApprovalTool.list_pending_by_user] user: {user}")
         tenant_id = self._get_tenant()
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -88,7 +87,7 @@ class ApprovalTool:
         )
         rows = cursor.fetchall()
         conn.close()
-        print(f"[ApprovalTool.list_pending_by_user] 查询到 {len(rows)} 条记录")
+        logger.info(f"[ApprovalTool.list_pending_by_user] 查询到 {len(rows)} 条记录")
         # 将 created_at 转换为字符串格式
         return [{
             "id": row[0],
@@ -254,7 +253,7 @@ class ApprovalTool:
         approval_id = approval_id.strip()
         user = self._get_current_user(query)
         doctor_id = self._get_doctor_id()
-        print(f"[DEBUG] approve - id: {approval_id}, user: {user}, doctor_id: {doctor_id}")
+        logger.debug(f"[DEBUG] approve - id: {approval_id}, user: {user}, doctor_id: {doctor_id}")
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -272,7 +271,7 @@ class ApprovalTool:
                 source="approval",
                 success=False
             )
-        print(f"[DEBUG] approve - 当前记录: id={row[0]}, reviewer={row[1]}, status={row[2]}")
+        logger.debug(f"[DEBUG] approve - 当前记录: id={row[0]}, reviewer={row[1]}, status={row[2]}")
 
         if row[1] != user:
             conn.close()
@@ -306,9 +305,9 @@ class ApprovalTool:
                 ip=None
             )
         except Exception as e:
-            print(f"[Audit] 审批日志记录失败: {e}")
+            logger.error(f"[Audit] 审批日志记录失败: {e}")
         conn.close()
-        print(f"[DEBUG] approve - affected rows: {affected}")
+        logger.info(f"[DEBUG] approve - affected rows: {affected}")
 
         if affected:
             return build_response(
@@ -325,7 +324,7 @@ class ApprovalTool:
         approval_id = approval_id.strip()
         user = self._get_current_user(query)
         doctor_id = self._get_doctor_id()
-        print(f"[DEBUG] reject - id: {approval_id}, user: {user}, doctor_id: {doctor_id}, comment: {comment}")
+        logger.debug(f"[DEBUG] reject - id: {approval_id}, user: {user}, doctor_id: {doctor_id}, comment: {comment}")
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -342,7 +341,7 @@ class ApprovalTool:
                 source="approval",
                 success=False
             )
-        print(f"[DEBUG] reject - 当前记录: id={row[0]}, reviewer={row[1]}, status={row[2]}")
+        logger.debug(f"[DEBUG] reject - 当前记录: id={row[0]}, reviewer={row[1]}, status={row[2]}")
 
         if row[1] != user:
             conn.close()
@@ -376,9 +375,9 @@ class ApprovalTool:
                 ip=None
             )
         except Exception as e:
-            print(f"[Audit] 审批日志记录失败: {e}")
+            logger.error(f"[Audit] 审批日志记录失败: {e}")
         conn.close()
-        print(f"[DEBUG] reject - affected rows: {affected}")
+        logger.debug(f"[DEBUG] reject - affected rows: {affected}")
 
         if affected:
             return build_response(
@@ -393,7 +392,7 @@ class ApprovalTool:
 
     def run(self, query: str) -> dict:
         # 直接使用原始 query，不提取“当前问题”
-        print(f"[DEBUG] ApprovalTool.run - 收到查询: {query[:200]}...")
+        logger.debug(f"[DEBUG] ApprovalTool.run - 收到查询: {query[:200]}...")
 
         # 1. 列表查询
         if "待审批" in query:
@@ -411,7 +410,7 @@ class ApprovalTool:
         match = re.search(r'审批通过\s*[:：]?\s*([A-Z0-9\-]+)', query)
         if match:
             approval_id = match.group(1)
-            print(f"[DEBUG] 匹配到审批通过: {approval_id}")
+            logger.info(f"[DEBUG] 匹配到审批通过: {approval_id}")
             return self.approve(approval_id, query)
 
         match = re.search(r'驳回\s*[:：]?\s*([A-Z0-9\-]+)\s*(.*?)$', query)

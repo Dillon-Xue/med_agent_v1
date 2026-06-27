@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 from openai import OpenAI
 from langchain_chroma import Chroma
-import os
+import os, logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from tools.retriever import HybridRetriever
 from typing import List, Optional
 from utils.config import get_llm_provider, get_ollama_base_url, get_ollama_model, get_llm_client
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.getenv("MED_AGENT_ROOT", os.getcwd())
 
@@ -13,10 +14,10 @@ class BaseTool(ABC):
     def __init__(self, base_dir, db_name, api_key):
         self.base_dir = PROJECT_ROOT
         self.db_path = os.path.join(self.base_dir, "vector_db", db_name)
-        print(f"\n[BASE_TOOL] db_path = {self.db_path}")
+        logger.debug(f"\n[BASE_TOOL] db_path = {self.db_path}")
 
         self.client, self.model = get_llm_client(api_key, timeout=60.0)
-        print(f"[BASE_TOOL] Using model: {self.model}")
+        logger.debug(f"[BASE_TOOL] Using model: {self.model}")
 
         self.vectordb = None
         self.retriever = None
@@ -28,7 +29,7 @@ class BaseTool(ABC):
             collection_name="langchain"
         )
         self.retriever = HybridRetriever(self.vectordb)
-        print(f"[BASE_TOOL] Chroma loaded from {self.db_path}")
+        logger.info(f"[BASE_TOOL] Chroma loaded from {self.db_path}")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -51,7 +52,7 @@ class BaseTool(ABC):
         try:
             return self._llm_call_with_retry(messages, temperature, model)
         except Exception as e:
-            print(f"[ERROR] LLM call failed after retries: {e}")
+            logger.error(f"[ERROR] LLM call failed after retries: {e}")
             if fallback_context:
                 return f"【系统降级】LLM 服务暂时不可用，以下是检索到的相关信息：\n\n{fallback_context[:500]}"
             else:
