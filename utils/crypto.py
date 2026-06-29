@@ -1,13 +1,17 @@
+import logging
 from cryptography.fernet import Fernet
 import os
 
-# 密钥从环境变量读取（不要硬编码！）
+logger = logging.getLogger(__name__)
+
+# 密钥从环境变量读取（禁止硬编码！）
 CRYPTO_KEY = os.getenv("CRYPTO_KEY")
 if not CRYPTO_KEY:
-    # 首次启动自动生成（仅开发环境）
-    CRYPTO_KEY = Fernet.generate_key().decode()
-    logger.warning(f"⚠️ 请将 CRYPTO_KEY={CRYPTO_KEY} 添加到 .env")
-    os.environ["CRYPTO_KEY"] = CRYPTO_KEY
+    raise RuntimeError(
+        "CRYPTO_KEY 环境变量未设置！\n"
+        "请在 .env 文件中添加：CRYPTO_KEY=<your-fernet-key>\n"
+        "生成密钥方法：在 Python 中执行 Fernet.generate_key().decode()"
+    )
 
 cipher = Fernet(CRYPTO_KEY.encode())
 

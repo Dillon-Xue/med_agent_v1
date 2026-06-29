@@ -1,5 +1,6 @@
-import os, json, pymysql, logging
+import os, json, logging
 from datetime import datetime
+from utils.database import get_connection
 logger = logging.getLogger(__name__)
 
 def get_tenant():
@@ -24,11 +25,11 @@ def get_current_user():
     return "system"
 
 
-def log_audit(action: str, resource_type: str, resource_id: str = None, 
+def log_audit(action: str, resource_type: str, resource_id: str = None,
               detail: dict = None, ip: str = None):
     """
     记录审计日志
-    
+
     Args:
         action: 操作类型 (QUERY/UPDATE/CREATE/APPROVE/REJECT)
         resource_type: 资源类型 (patient/approval/conversation)
@@ -36,14 +37,14 @@ def log_audit(action: str, resource_type: str, resource_id: str = None,
         detail: 操作详情（会脱敏）
         ip: 客户端IP
     """
-    logger.debug(f"[Audit] 被调用: {action} {resource_type} {resource_id}")  # 🆕 加这行
+    logger.debug(f"[Audit] 被调用: {action} {resource_type} {resource_id}")
     try:
         # 导入脱敏函数
         from utils.response import mask_sensitive
-        
+
         user_id = get_current_user()
         tenant_id = get_tenant()
-        
+
         # 对 detail 中的敏感信息脱敏
         if detail:
             # 如果是 dict，转为 JSON 字符串后脱敏
@@ -54,18 +55,12 @@ def log_audit(action: str, resource_type: str, resource_id: str = None,
             detail_str = mask_sensitive(detail_str)
         else:
             detail_str = None
-        
-        conn = pymysql.connect(
-            host=os.getenv("DB_HOST", "localhost"),
-            user=os.getenv("DB_USER", "root"),
-            password=os.getenv("DB_PASSWORD", "yourpassword"),
-            database=os.getenv("DB_NAME", "patient_db"),
-            charset='utf8mb4'
-        )
+
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO audit_logs 
-               (user_id, tenant_id, action, resource_type, resource_id, detail, ip_address) 
+            """INSERT INTO audit_logs
+               (user_id, tenant_id, action, resource_type, resource_id, detail, ip_address)
                VALUES (%s, %s, %s, %s, %s, %s, %s)""",
             (user_id, tenant_id, action, resource_type, resource_id, detail_str, ip)
         )

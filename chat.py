@@ -1,4 +1,5 @@
 import os, re, json, hashlib, time, logging, pymysql, asyncio, httpx, requests, io
+from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +19,7 @@ from agents.supervisor import Supervisor
 from agents.agent_factory import get_agent
 from agents.aggregator import Aggregator
 from utils.config import setup_logging
+from utils.database import get_connection
 from tools.memory_tool import MemoryTool
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,12 @@ trace_lock = asyncio.Lock()
 # =========================
 LOG_FILE = "logs/app.log"
 os.makedirs("logs", exist_ok=True)
+
+# =========================
+# 路径配置
+# =========================
+BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+REPORTS_DIR = (BASE_DIR / "reports").resolve()
 
 setup_logging()
 logger = logging.getLogger("med_agent")
@@ -140,7 +148,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -381,13 +389,7 @@ def save_conversation(session_id: str, role: str, content: str,
                       conversation_type: str = "quick", tenant_id: str = None):
     """保存单条对话记录到 conversations 表"""
     try:
-        conn = pymysql.connect(
-            host=os.getenv("DB_HOST", "localhost"),
-            user=os.getenv("DB_USER", "root"),
-            password=os.getenv("DB_PASSWORD", "yourpassword"),
-            database=os.getenv("DB_NAME", "patient_db"),
-            charset='utf8mb4'
-        )
+        conn = get_connection()
         cursor = conn.cursor()
         
         tools_json = json.dumps(tools_used) if tools_used else None
@@ -963,13 +965,21 @@ async def metrics():
     }
 )
 async def download_report(filename: str):
-    file_path = f"reports/{filename}"
-    if not os.path.exists(file_path):
+    # 安全校验：只取文件名部分，防止路径遍历
+    safe_filename = Path(filename).name
+    file_path = (REPORTS_DIR / safe_filename).resolve()
+
+    # 确保最终路径在 reports 目录内
+    if not str(file_path).startswith(str(REPORTS_DIR)):
+        return {"error": "非法路径"}
+
+    if not file_path.exists():
         return {"error": "文件不存在"}
+
     return FileResponse(
         file_path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=filename
+        filename=safe_filename
     )
 
 
@@ -1049,13 +1059,7 @@ async def get_history(session_id: str, limit: int = 50, conversation_type: str =
     - **conversation_type**: 可选过滤（quick / consult / approval）
     """
     try:
-        conn = pymysql.connect(
-            host=os.getenv("DB_HOST", "localhost"),
-            user=os.getenv("DB_USER", "root"),
-            password=os.getenv("DB_PASSWORD", "yourpassword"),
-            database=os.getenv("DB_NAME", "patient_db"),
-            charset='utf8mb4'
-        )
+        conn = get_connection()
         cursor = conn.cursor()
         
         sql = """SELECT id, role, content, tools_used, file_name, conversation_type, created_at 
@@ -1186,13 +1190,7 @@ async def get_approval_detail(approval_id: str, request: Request):
         )
     
     try:
-        conn = pymysql.connect(
-            host=os.getenv("DB_HOST", "localhost"),
-            user=os.getenv("DB_USER", "root"),
-            password=os.getenv("DB_PASSWORD", "yourpassword"),
-            database=os.getenv("DB_NAME", "patient_db"),
-            charset='utf8mb4'
-        )
+        conn = get_connection()
         cursor = conn.cursor()
         
         cursor.execute(
@@ -1253,9 +1251,15 @@ async def preview_report(filename: str):
     """
     将 Word 文档内容转换为 HTML 预览
     """
-    file_path = f"reports/{filename}"
-    
-    if not os.path.exists(file_path):
+    # 安全校验：只取文件名部分，防止路径遍历
+    safe_filename = Path(filename).name
+    file_path = (REPORTS_DIR / safe_filename).resolve()
+
+    # 确保最终路径在 reports 目录内
+    if not str(file_path).startswith(str(REPORTS_DIR)):
+        return {"success": False, "error": "非法路径"}
+
+    if not file_path.exists():
         return {"success": False, "error": "文件不存在"}
     
     try:

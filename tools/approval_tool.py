@@ -1,23 +1,15 @@
-import os, re, pymysql, logging
+import os, re, logging
 from utils.response import build_response
 from utils.crypto import encrypt_if_needed, decrypt_if_needed
+from utils.database import get_connection
 logger = logging.getLogger(__name__)
 
 class ApprovalTool:
     def __init__(self):
-        self.db_host = os.getenv("DB_HOST", "localhost")
-        self.db_user = os.getenv("DB_USER", "root")
-        self.db_password = os.getenv("DB_PASSWORD", "yourpassword")
-        self.db_name = os.getenv("DB_NAME", "patient_db")
+        pass
 
     def _get_connection(self):
-        return pymysql.connect(
-            host=self.db_host,
-            user=self.db_user,
-            password=self.db_password,
-            database=self.db_name,
-            charset='utf8mb4'
-        )
+        return get_connection()
     def _get_doctor_id(self) -> str:
         """获取当前医生ID（用于数据隔离）"""
         try:

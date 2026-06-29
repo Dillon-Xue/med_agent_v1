@@ -1,17 +1,14 @@
-import os, re, json, pymysql, time, logging
+import os, re, json, time, logging
 from utils.response import build_response
 from openai import OpenAI
 from utils.audit import log_audit
 from utils.crypto import encrypt_if_needed, decrypt_if_needed
 from utils.config import get_llm_client
+from utils.database import get_connection
 logger = logging.getLogger(__name__)
 
 class PatientTool:
     def __init__(self):
-        self.db_host = os.getenv("DB_HOST", "localhost")
-        self.db_user = os.getenv("DB_USER", "root")
-        self.db_password = os.getenv("DB_PASSWORD", "yourpassword")
-        self.db_name = os.getenv("DB_NAME", "patient_db")
         self.api_key = os.getenv("DASHSCOPE_API_KEY")
         # 🆕 使用统一客户端工厂
         self.client, self.model = get_llm_client(self.api_key)
@@ -19,13 +16,7 @@ class PatientTool:
         self._init_db()
 
     def _get_connection(self):
-        return pymysql.connect(
-            host=self.db_host,
-            user=self.db_user,
-            password=self.db_password,
-            database=self.db_name,
-            charset='utf8mb4'
-        )
+        return get_connection()
 
     def _init_db(self):
         """初始化表结构（支持结构化字段）"""
