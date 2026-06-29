@@ -1,6 +1,6 @@
 import os, json, pymysql, logging
 from datetime import datetime
-
+logger = logging.getLogger(__name__)
 
 def get_tenant():
     """获取当前租户ID"""

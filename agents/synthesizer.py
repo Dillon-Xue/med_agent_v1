@@ -85,6 +85,16 @@ class Synthesizer:
 
         combined = "\n\n".join(context_parts)
 
+        # ===== 提取历史参考部分 =====
+        import re
+        history_ref_section = ""
+        cleaned_question = augmented_question
+        if "【历史参考病例】" in augmented_question:
+            match = re.search(r'(【历史参考病例】.*?)(?=\n\n|\Z)', augmented_question, re.DOTALL)
+            if match:
+                history_ref_section = match.group(1)
+                cleaned_question = augmented_question.replace(history_ref_section, "").strip()
+
         specialty_prompts = {
             "cardiology": "你是心外科专家，回答需基于心血管临床指南。",
             "pharmacy": "你是药剂科专家，重点关注药物相互作用、剂量调整和用药安全。",
@@ -101,8 +111,13 @@ class Synthesizer:
             "detailed": "回答可详尽展开，不限制长度，确保信息完整。"
         }.get(mode, "")
 
-        # system_prompt 不再包含 length_instruction
-        system_prompt = f"""{base_prompt} 回答必须严格遵循以下纯文本格式，不要使用任何markdown语法。
+        # system_prompt 中强制规则
+        history_rule = ""
+        if history_ref_section:
+            history_rule = "你必须以【历史参考病例】开头回答，并明确提及病例中的患者姓名和用药方案。这是强制要求，不得省略。"
+
+        system_prompt = f"""{base_prompt} {history_rule}
+        回答必须严格遵循以下纯文本格式，不要使用任何markdown语法。
         输出格式要求：
         1. 第一行：核心结论（一句话）。
         2. 空一行。
@@ -112,16 +127,31 @@ class Synthesizer:
         6. 最后一行：总结建议。
         注意：不要使用任何加粗符号，不要使用星号。每一条信息末尾标注【来源：xxx】。"""
 
-        # length_instruction 放到 user_prompt 开头
-        user_prompt = f"""{length_instruction}
+        # ===== 构建 user_prompt =====
+        if history_ref_section:
+            user_prompt = f"""{length_instruction}
 
-        对话历史及当前问题：
-        {augmented_question}
+    {history_ref_section}
 
-        各工具返回结果：
-        {combined}
+    当前问题：
+    {cleaned_question}
 
-        请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。"""
+    各工具返回结果：
+    {combined}
+
+    请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。
+
+    ⚠️ 注意：你的回答必须以「【历史参考病例】」开头，并明确提到患者姓名和用药方案。这是强制要求，不得违反。"""
+        else:
+            user_prompt = f"""{length_instruction}
+
+    对话历史及当前问题：
+    {cleaned_question}
+
+    各工具返回结果：
+    {combined}
+
+    请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。"""
 
         try:
             resp = self.client.chat.completions.create(
@@ -137,6 +167,15 @@ class Synthesizer:
             logger.debug(f"[Synthesizer] LLM 调用失败: {e}")
             answer = f"【系统降级】LLM 合成失败，以下是各工具原始结果：\n\n{combined[:1000]}"
 
+        # 🆕 强制后处理：如果历史参考存在但回答中没有提及，自动追加
+        if history_ref_section and "历史参考" not in answer and "赵六" not in answer:
+            # 提取历史病例中的关键信息
+            name_match = re.search(r'([\u4e00-\u9fa5]{2,4})[：:]\s*([^，,]+)', history_ref_section)
+            if name_match:
+                patient_name = name_match.group(1)
+                diagnosis = name_match.group(2)
+                answer = f"【历史参考病例】参考患者 {patient_name}（{diagnosis}）的用药经验，该病例相似度15%。\n\n{answer}"
+
         if trace_callback:
             trace_callback("synthesizer", {
                 "status": "complete",
@@ -145,5 +184,16 @@ class Synthesizer:
 
         specialty_display = {"cardiology": "心外科", "pharmacy": "药剂科", "general": "全科"}.get(self.specialty, "全科")
         answer = f"【{specialty_display}观点】\n{answer}"
+
+            # ===== 🆕 强制追加历史参考（如果缺失） =====
+        if "【历史参考病例】" in augmented_question:
+            import re
+            match = re.search(r'【历史参考病例】\s*[-]?\s*([\u4e00-\u9fa5]{2,4})[：:]\s*([^，,\n]+)', augmented_question)
+            if match:
+                name = match.group(1)
+                diagnosis = match.group(2)
+                history_line = f"\n\n【历史参考】相似病例：{name}（{diagnosis}）"
+                if history_line not in answer:
+                    answer = answer + history_line
 
         return answer

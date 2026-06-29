@@ -295,6 +295,30 @@ class ApprovalTool:
         )
         affected = cursor.rowcount
         conn.commit()
+
+        # ===== 🆕 数据回流：审批通过后写入记忆库 =====
+        if affected:
+            try:
+                # 查询完整审批内容
+                cursor.execute(
+                    "SELECT content, type, requester FROM approvals WHERE id = %s",
+                    (approval_id,)
+                )
+                approval_row = cursor.fetchone()
+                if approval_row:
+                    content = approval_row[0]
+                    approval_type = approval_row[1]
+                    requester = approval_row[2]
+
+                    # 仅对用药评估类型触发数据回流
+                    if approval_type == "medication_evaluation":
+                        self._write_to_memory(approval_id, content, requester, doctor_id)
+            except Exception as e:
+                logger.error(f"[数据回流] 写入记忆库失败: {e}")
+                # 不影响审批主流程
+
+        conn.close()
+
         try:
             from utils.audit import log_audit
             log_audit(
@@ -306,7 +330,7 @@ class ApprovalTool:
             )
         except Exception as e:
             logger.error(f"[Audit] 审批日志记录失败: {e}")
-        conn.close()
+
         logger.info(f"[DEBUG] approve - affected rows: {affected}")
 
         if affected:
@@ -319,6 +343,59 @@ class ApprovalTool:
             source="approval",
             success=False
         )
+
+
+    # ===== 🆕 数据回流辅助方法 =====
+    def _write_to_memory(self, approval_id: str, content: str, requester: str, doctor_id: str):
+        """
+        将审批通过的内容写入记忆向量库
+        """
+        import re
+        from tools.memory_tool import MemoryTool
+        from utils.crypto import decrypt_if_needed
+
+        # 解密 content（存储时是加密的）
+        decrypted_content = decrypt_if_needed(content)
+        logger.info(f"[数据回流] 审批 {approval_id} 解密后的 content 预览:\n{decrypted_content[:500]}")
+
+        # 解析 content 中的关键字段
+        def extract_field(text: str, field_name: str) -> str:
+            pattern = rf'{field_name}[：:]\s*([^\n]+)'
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1).strip()
+            else:
+                logger.warning(f"[数据回流] 未找到字段 '{field_name}'")
+                return ""
+
+        patient_name = extract_field(decrypted_content, "患者姓名")
+        diagnosis = extract_field(decrypted_content, "临床诊断")
+        medications = extract_field(decrypted_content, "目前用药")
+        assessment = extract_field(decrypted_content, "评估结果")
+        medication_goal = extract_field(decrypted_content, "用药目标")
+        precautions = extract_field(decrypted_content, "用药注意事项")
+
+        if not patient_name or not diagnosis:
+            logger.warning(f"[数据回流] 审批 {approval_id} 缺少患者姓名或诊断，跳过写入")
+            return
+
+        try:
+            memory_tool = MemoryTool()
+            memory_tool.remember(
+                patient_name=patient_name,
+                diagnosis=diagnosis,
+                medications=medications,
+                assessment=assessment,
+                medication_goal=medication_goal,
+                precautions=precautions,
+                doctor_id=doctor_id,
+                approval_id=approval_id,
+                requester=requester
+            )
+            logger.info(f"[数据回流] 审批 {approval_id} 已写入记忆库：{patient_name} - {diagnosis}")
+        except Exception as e:
+            logger.error(f"[数据回流] 写入记忆库失败: {e}")
+            raise
 
     def reject(self, approval_id: str, comment: str = "", query: str = "") -> dict:
         approval_id = approval_id.strip()

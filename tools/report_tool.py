@@ -2,6 +2,7 @@ import os, re, logging
 from datetime import datetime
 from docx import Document
 from utils.response import build_response
+from utils.config import get_llm_model  # 新增导入
 logger = logging.getLogger(__name__)
 
 class ReportTool:
@@ -9,6 +10,8 @@ class ReportTool:
         self.template_path = "templates/登记表模板.docx"
         self.output_dir = "reports/"
         os.makedirs(self.output_dir, exist_ok=True)
+        self.model = get_llm_model()  # 新增
+        self.api_key = os.getenv("DASHSCOPE_API_KEY")  # 新增
 
     def _log(self, msg):
         logger.debug(f"[ReportTool] {msg}")
@@ -84,8 +87,9 @@ class ReportTool:
             success=False,
             debug={"candidates": candidates}
         )
-
+    
     def _generate_from_candidate(self, candidate: dict) -> dict:
+        from utils.crypto import decrypt_if_needed
         doctor_id = self._get_doctor_id()
         if candidate.get("doctor_id") != doctor_id:
             return build_response(
@@ -94,7 +98,9 @@ class ReportTool:
                 success=False
             )
         
-        id_card = candidate.get("id_card", "")
+        # ===== 🆕 显式解密敏感字段 =====
+        id_card = decrypt_if_needed(candidate.get("id_card", ""))
+        phone = decrypt_if_needed(candidate.get("phone", ""))
         if not id_card:
             return build_response(
                 answer=f"❌ 患者 {candidate['name']} 缺少身份证号，请先补充：\n记住患者 {candidate['name']}：身份证号 410123199001011234\n然后重新生成评估表。",
@@ -107,13 +113,14 @@ class ReportTool:
             "姓名": candidate.get("name", ""),
             "性别": candidate.get("gender", ""),
             "年龄": candidate.get("age", ""),
-            "联系方式": candidate.get("phone", ""),
+            "联系方式": phone,
             "家庭住址": candidate.get("address", ""),
             "目前用药": candidate.get("medication", ""),
             "临床诊断": candidate.get("diagnosis", ""),
             "症状": candidate.get("symptoms", ""),
             "过敏史": candidate.get("allergy", ""),
-            "主要问题": candidate.get("diagnosis", "")  # 默认用诊断作为主要问题
+            "主要问题": candidate.get("diagnosis", ""),  # 默认用诊断作为主要问题
+            "身份证号": id_card,
         }
 
         # 🆕 如果结构化字段都为空，降级用正则解析 info（兼容旧数据）
@@ -194,6 +201,7 @@ class ReportTool:
         )
 
     def _complete_address(self, address: str) -> str:
+        from utils.config import get_llm_model
         if not address:
             return address
         if re.search(r'省.*市', address):
@@ -204,6 +212,7 @@ class ReportTool:
                 api_key=os.getenv("DASHSCOPE_API_KEY"),
                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
             )
+            model = get_llm_model()
             prompt = f"""
 请将以下中国城市地址补全为完整的“省份+城市”格式，只输出结果，不要添加任何解释。
 输入地址：{address}
@@ -211,7 +220,7 @@ class ReportTool:
 示例：长沙市 → 湖南省长沙市
 """
             resp = client.chat.completions.create(
-                model=self.model,
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )

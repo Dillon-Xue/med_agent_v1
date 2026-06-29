@@ -8,6 +8,8 @@ from tools.tool_registry import get_tools
 from openai import OpenAI
 from utils.response import mask_sensitive, mask_dict_sensitive
 from utils.config import get_llm_client
+import chat as chat_module  # 放在文件顶部导入区域
+from tools.memory_tool import MemoryTool
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +354,28 @@ class ConsultGraph:
         info_str = "，".join(parts) if parts else ""
         enhanced = "患者信息：" + info_str + "。问题：" + original_question if parts else original_question
 
+        #  L4 语义记忆检索（注入历史参考）
+        memory_context = ""
+        try:
+            doctor_id = getattr(chat_module, 'current_session_user', 'default')
+            memory_tool = MemoryTool()
+            results = memory_tool.recall(original_question, k=2, doctor_id=doctor_id)
+            if results:
+                memory_lines = ["【历史参考病例】"]
+                for r in results:
+                    meta = r["metadata"]
+                    memory_lines.append(
+                        f"- {meta.get('patient_name', '未知')}：{meta.get('diagnosis', '')}，"
+                        f"用药：{meta.get('medications', '无')}"
+                    )
+                memory_context = "\n".join(memory_lines) + "\n"
+                self._log(f"检索到 {len(results)} 条历史病例")
+        except Exception as e:
+            print(f"[Memory] 检索失败: {e}")
+
+        if memory_context:
+            enhanced = memory_context + enhanced
+
         plan = self.planner.run(enhanced)
         tool_list = plan.get("tools", ["drug", "guideline", "literature", "risk"])
         tool_list = [t for t in tool_list if t != "patient"]
@@ -434,7 +458,7 @@ class ConsultGraph:
             results = []
 
         answer = self.synthesizer.run(question, results)
-        prilogger.debugnt(f"[ConsultGraph._synthesize] 合成答案完成")
+        logger.debug(f"[ConsultGraph._synthesize] 合成答案完成")
 
         state["final_answer"] = answer
         return state

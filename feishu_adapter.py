@@ -87,6 +87,7 @@ channel.on("message", handle_message)
 
 async def main():
     logger.info("[飞书] 启动长连接...")
+    
     await channel.connect()
     await asyncio.Event().wait()
 

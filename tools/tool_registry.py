@@ -1,8 +1,6 @@
 import os, logging
 from dotenv import load_dotenv
-from tools.approval_tool import ApprovalTool
 load_dotenv()
-from tools.file_tool import FileTool
 
 logger = logging.getLogger(__name__)
 BASE_DIR = os.getenv("MED_AGENT_ROOT", os.getcwd())
@@ -23,9 +21,12 @@ def init_tools():
     from tools.drug_tool import DrugTool
     from tools.literature_tool import LiteratureTool
     from tools.guideline_tool import GuidelineTool
+    from tools.approval_tool import ApprovalTool
     from tools.risk_tool import RiskTool
     from tools.patient_tool import PatientTool   # 导入 MySQL 版
     from tools.report_tool import ReportTool
+    from tools.file_tool import FileTool
+    from tools.memory_tool import MemoryTool
 
     TOOLS = {
         "rag": RAGTool(BASE_DIR, api_key),
@@ -37,6 +38,7 @@ def init_tools():
         "report": ReportTool(),
         "approval": ApprovalTool(),
         "file": FileTool(api_key),
+        "memory": MemoryTool(),
     }
 
     logger.debug("\n========== TOOL INIT OK ==========")

@@ -18,6 +18,7 @@ from agents.supervisor import Supervisor
 from agents.agent_factory import get_agent
 from agents.aggregator import Aggregator
 from utils.config import setup_logging
+from tools.memory_tool import MemoryTool
 logger = logging.getLogger(__name__)
 
 
@@ -222,38 +223,29 @@ def get_cache_key(question: str) -> str:
 # 核心问答逻辑
 # =========================
 async def process_question(question: str, history: list, trace_callback=None) -> dict:
+    global current_session_user
     logger.info(f"[process_question] 收到的 trace_callback 是否为 None: {trace_callback is None}")
     
     def _is_topic_shift(current_q: str, history: list) -> bool:
-        """检测是否发生话题切换"""
         if not history:
             return False
-
         import re
-        # 提取当前问题中的关键词（2-6个中文字符）
         current_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,6}', current_q))
-        
-        # 从历史中提取关键词（最近 3 轮用户消息）
         user_messages = [msg["content"] for msg in history[-6:] if msg.get("role") == "user"]
         if not user_messages:
             return False
-        
         history_keywords = set()
         for msg in user_messages:
             history_keywords.update(re.findall(r'[\u4e00-\u9fa5]{2,6}', msg))
-        
         if not history_keywords or not current_keywords:
             return False
-        
         overlap = len(current_keywords & history_keywords)
         overlap_rate = overlap / len(current_keywords)
-        
         is_shift = overlap_rate < 0.3
         if is_shift:
             logger.info(f"[话题切换] 重叠度 {overlap_rate:.2%}，截断历史")
         return is_shift
-    
-    """执行完整的问答流程（不含拦截）"""
+
     stripped = question.strip()
     greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "你好呀"]
     if stripped in greetings or stripped.lower() in greetings:
@@ -268,14 +260,11 @@ async def process_question(question: str, history: list, trace_callback=None) ->
             "trace": {"executor": []}
         }
 
-    # 构建上下文（历史 + 患者档案预加载）
+    # ==================== 1. 构建对话上下文 ====================
     if history:
-        # ===== 🆕 话题切换检测（放在最前面，直接处理 history） =====
         if _is_topic_shift(question, history):
-            # 话题切换，仅保留最近 2 条
             history = []
-            logger.info(f"[话题切换] 检测到切换，清空历史")
-        
+            logger.info("[话题切换] 检测到切换，清空历史")
         recent = history[-5:]
         filtered = []
         for msg in recent:
@@ -290,7 +279,7 @@ async def process_question(question: str, history: list, trace_callback=None) ->
     else:
         augmented_question = question
 
-    # 患者档案预加载
+    # ==================== 2. 加载患者档案 ====================
     patient_context = ""
     if "患者" in question and "记住" not in question and "记录" not in question and "追加" not in question and "补充" not in question:
         name_match = re.search(r'患者\s*([\u4e00-\u9fa5]{2,4})', question)
@@ -317,12 +306,36 @@ async def process_question(question: str, history: list, trace_callback=None) ->
                         patient_context = f"【患者档案】姓名：{name}，{info}\n"
                         logger.info(f"[Patient] 已加载患者 {name} 档案")
 
-    if patient_context:
-        final_augmented = patient_context + augmented_question
-    else:
-        final_augmented = augmented_question
+    # ==================== 3. L4 语义记忆检索 ====================
+    memory_context = ""
+    try:
+        from tools.memory_tool import MemoryTool
+        doctor_id = current_session_user if current_session_user else None
+        memory_tool = MemoryTool()
+        results = memory_tool.recall(question, k=2, doctor_id=doctor_id)
+        if results:
+            memory_lines = ["【历史参考病例】"]
+            for r in results:
+                meta = r["metadata"]
+                memory_lines.append(
+                    f"- {meta.get('patient_name', '未知')}：{meta.get('diagnosis', '')}，"
+                    f"用药：{meta.get('medications', '无')}，"
+                    f"相似度：{(1 - r.get('score', 0)):.0%}"
+                )
+            memory_context = "\n".join(memory_lines) + "\n\n"
+            logger.info(f"[Memory] 检索到 {len(results)} 条历史病例")
+    except Exception as e:
+        logger.error(f"[Memory] 检索失败: {e}")
 
-    # 调用 Planner
+    # ==================== 4. 合并最终上下文 ====================
+    final_augmented = ""
+    if patient_context:
+        final_augmented += patient_context
+    if memory_context:
+        final_augmented += memory_context
+    final_augmented += augmented_question
+
+    # ==================== 5. 多 Agent 执行 ====================
     route = supervisor.route(question)
     primary = route.get("primary", "general")
     secondary = route.get("secondary", [])
@@ -412,6 +425,8 @@ def save_conversation(session_id: str, role: str, content: str,
 )
 async def ask(req: ChatRequest, request: Request):
     import re 
+    import asyncio
+    import uuid
     logger.info(f"[ASK] ==== 请求开始 ====")
     logger.error(f"[ASK] 所有 headers: {request.headers}")
     logger.info(f"[ASK] X-Trace-ID: {request.headers.get('X-Trace-ID')}")
@@ -419,6 +434,7 @@ async def ask(req: ChatRequest, request: Request):
     question = req.question.strip()
     history = req.history
     session_id = request.headers.get("X-Session-ID")
+    
     # 1. 身份声明
     if re.match(r'^用户[：:]', question):
         user_match = re.search(r'用户[：:]\s*(\S+)', question)
@@ -435,7 +451,8 @@ async def ask(req: ChatRequest, request: Request):
                 },
                 "trace": {"executor": []}
             }
-    # 🆕 2. 身份查询（审批助手 / 快速问答 通用）
+    
+    # 2. 身份查询
     if question in ["用户是谁", "我是谁", "当前用户", "whoami"]:
         if current_session_user:
             return {
@@ -460,26 +477,21 @@ async def ask(req: ChatRequest, request: Request):
                 "trace": {"executor": []}
             }
 
-    # 2. 审批指令拦截（不经过 process_question）
+    # 3. 审批指令拦截
     approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
     if any(kw in question for kw in approval_keywords):
         logger.warning(f"[Chat] 拦截到审批指令，直接处理: {question}")
-
-        # 获取会话信息
         session_id = request.headers.get("X-Session-ID")
         conv_type = request.headers.get("X-Conversation-Type", "unknown")
         logger.warning(f"[Chat] 审批拦截 - session_id: {session_id}, conv_type: {conv_type}")
 
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
-        result = approval_tool.run(question)  # 传入原始问题，不带历史
-    # 🆕 ===== 审计日志（在 chat.py 中记录） =====
+        result = approval_tool.run(question)
         try:
             from utils.audit import log_audit
-            # 检查 result 中是否有审批通过/驳回的信息
             answer = result.get("answer", "")
             if "审批通过" in answer:
-                # 提取审批ID
                 import re
                 match = re.search(r'审批\s*([A-Z0-9\-]+)\s*已通过', answer)
                 if match:
@@ -505,15 +517,12 @@ async def ask(req: ChatRequest, request: Request):
         except Exception as e:
             logger.error(f"[Audit] 审批日志记录失败: {e}")
 
-        # 🆕 保存审批助手的对话记录
         if session_id:
             logger.debug("[Chat] 审批拦截 - 开始保存对话")
             try:
-                save_conversation(session_id, "user", question,
-                                conversation_type="approval")
+                save_conversation(session_id, "user", question, conversation_type="approval")
                 answer = result.get("answer", "")
-                save_conversation(session_id, "assistant", answer,
-                                conversation_type="approval")
+                save_conversation(session_id, "assistant", answer, conversation_type="approval")
                 logger.debug("[Chat] 审批拦截 - 保存完成")
             except Exception as e:
                 logger.error(f"[Chat] 审批拦截 - 保存失败: {e}")
@@ -530,12 +539,11 @@ async def ask(req: ChatRequest, request: Request):
             "trace": {"executor": [result]}
         }
 
-    # 3. 患者操作拦截
+    # 4. 患者操作拦截
     if re.search(r'记住患者|记录患者|追加患者|补充患者', question, re.IGNORECASE):
         logger.info(f"[Chat] 拦截到患者操作: {question}")
         from tools.patient_tool import PatientTool
         patient_tool = PatientTool()
-        # 直接解析
         name_match = re.search(r'(?:记住患者|记录患者|追加患者|补充患者)\s*([\u4e00-\u9fa5]{2,4})\s*[:：]?\s*(.+)', question)
         if name_match:
             name = name_match.group(1)
@@ -563,12 +571,13 @@ async def ask(req: ChatRequest, request: Request):
                 "trace": {"executor": []}
             }
 
-    # 4. 正常问答（走缓存 + process_question） 
+    # ============================================================
+    # 5. 正常问答（错误处理 + 超时控制）
+    # ============================================================
     cache_key = get_cache_key(question)
-    trace_id = request.headers.get("X-Trace-ID") or request.headers.get("x-trace-id")  # 前端生成的 trace_session_id
+    trace_id = request.headers.get("X-Trace-ID") or request.headers.get("x-trace-id")
     logger.info(f"[Trace] 收到 trace_id: {trace_id}")
-    
-    # 🆕 定义 trace_callback 函数
+
     def trace_callback(step_type: str, data: dict):
         logger.info(f"[Trace] 收到 step: {step_type}, data: {data}")
         if not trace_id:
@@ -598,15 +607,72 @@ async def ask(req: ChatRequest, request: Request):
         except Exception as e:
             logger.error(f"[Trace] 启动失败: {e}")
 
-    # ===== 执行问答，获取 result =====
+    # ===== 执行问答 =====
+    try:
+        # 超时控制：整个问答流程最多 60 秒
+        result = await asyncio.wait_for(
+            _execute_ask(question, history, trace_id, cache_key, trace_callback),
+            timeout=60.0
+        )
+    except asyncio.TimeoutError:
+        error_id = str(uuid.uuid4())[:8]
+        logger.error(f"[Ask] 请求超时 (error_id={error_id})")
+        return {
+            "success": False,
+            "result": {
+                "answer": f"⏱️ 请求超时（60秒），请稍后重试。（错误ID：{error_id}）",
+                "tools_used": [],
+                "plan": {"question": question, "tools": []},
+                "tool_results": []
+            },
+            "trace": {"executor": []}
+        }
+    except Exception as e:
+        error_id = str(uuid.uuid4())[:8]
+        logger.error(f"[Ask] 异常: {e} (error_id={error_id})", exc_info=True)
+        return {
+            "success": False,
+            "result": {
+                "answer": f"❌ 服务暂时不可用，请稍后重试。（错误ID：{error_id}）",
+                "tools_used": [],
+                "plan": {"question": question, "tools": []},
+                "tool_results": []
+            },
+            "trace": {"executor": []}
+        }
+
+    # ===== 保存历史记录 =====
+    session_id = request.headers.get("X-Session-ID")
+    conv_type = request.headers.get("X-Conversation-Type", "quick")
+    if session_id and result and result.get("success"):
+        try:
+            save_conversation(session_id, "user", question, conversation_type=conv_type)
+            answer = result.get("result", {}).get("answer", "")
+            tools_used = result.get("result", {}).get("tools_used", [])
+            save_conversation(session_id, "assistant", answer, tools_used=tools_used, conversation_type=conv_type)
+            logger.info(f"[历史记录] 已保存会话 {session_id}，类型：{conv_type}")
+        except Exception as e:
+            logger.error(f"[历史记录] 保存失败: {e}")
+
+    # 更新 trace 结束时间
+    if trace_id and trace_id in trace_store:
+        trace_store[trace_id]["end_time"] = time.time()
+
+    return result
+
+
+# ============================================================
+# 🆕 辅助函数：提取正常的问答执行逻辑
+# ============================================================
+async def _execute_ask(question: str, history: list, trace_id: str, cache_key: str, trace_callback):
+    """将缓存判断和 process_question 调用独立出来，便于超时控制"""
     result = None
-    
+
     if should_cache(question, history):
         cached_result = cache.get(cache_key)
         if cached_result:
             logger.info(f"[Cache] 命中缓存，问题：{question}")
             result = cached_result
-            # 🆕 缓存命中时也记录 trace（仅记录命中状态）
             if trace_id:
                 try:
                     if trace_id in trace_store:
@@ -625,22 +691,6 @@ async def ask(req: ChatRequest, request: Request):
         logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{question}")
         result = await process_question(question, history, trace_callback=trace_callback if trace_id else None)
 
-    # ===== 🆕 统一保存历史记录（所有分支都执行） =====
-    session_id = request.headers.get("X-Session-ID")
-    conv_type = request.headers.get("X-Conversation-Type", "quick")
-    if session_id and result and result.get("success"):
-        try:
-            save_conversation(session_id, "user", question, conversation_type=conv_type)
-            answer = result.get("result", {}).get("answer", "")
-            tools_used = result.get("result", {}).get("tools_used", [])
-            save_conversation(session_id, "assistant", answer, tools_used=tools_used, conversation_type=conv_type)
-            logger.info(f"[历史记录] 已保存会话 {session_id}，类型：{conv_type}")
-        except Exception as e:
-            logger.error(f"[历史记录] 保存失败: {e}")
-
-    # 更新 trace 结束时间（如果 trace_id 存在）
-    if trace_id and trace_id in trace_store:
-        trace_store[trace_id]["end_time"] = time.time()
     return result
 
 # =========================
@@ -654,6 +704,8 @@ async def ask(req: ChatRequest, request: Request):
     response_model=AskResponse
 )
 async def consult(req: ChatRequest, request: Request):
+    import asyncio
+    import uuid
     global current_session_user
     question = req.question.strip()
     history = req.history
@@ -675,7 +727,7 @@ async def consult(req: ChatRequest, request: Request):
                 "trace": {"executor": []}
             }
 
-    # 🆕 2. 身份查询
+    # 身份查询
     if question in ["用户是谁", "我是谁", "当前用户", "whoami"]:
         if current_session_user:
             return {
@@ -740,14 +792,11 @@ async def consult(req: ChatRequest, request: Request):
         approval_tool = ApprovalTool()
         result = approval_tool.run(question)
 
-        # 🆕 保存审批助手的对话记录
         session_id = request.headers.get("X-Session-ID")
         if session_id:
-            save_conversation(session_id, "user", question,
-                            conversation_type="approval")
+            save_conversation(session_id, "user", question, conversation_type="approval")
             answer = result.get("answer", "")
-            save_conversation(session_id, "assistant", answer,
-                            conversation_type="approval")
+            save_conversation(session_id, "assistant", answer, conversation_type="approval")
 
         return {
             "success": True,
@@ -760,24 +809,24 @@ async def consult(req: ChatRequest, request: Request):
             "trace": {"executor": [result]}
         }
 
-    # 正常进入 LangGraph 问诊
+    # ============================================================
+    # 正常进入 LangGraph 问诊（超时控制 + 错误处理）
+    # ============================================================
     logger.info(f"[Consult] 正常进入 LangGraph 问诊流程")
+    
     try:
-        answer = consult_graph.run(question, history)
-        session_id = request.headers.get("X-Session-ID")
-        if session_id:
-            try:
-                # 保存用户问题
-                save_conversation(session_id, "user", question, conversation_type="consult")
-                # 保存助手回答
-                save_conversation(session_id, "assistant", answer, conversation_type="consult")
-                logger.info(f"[历史记录] 已保存智能问诊会话 {session_id}")
-            except Exception as e:
-                logger.error(f"[历史记录] 保存失败: {e}")
+        # 60秒超时，用 to_thread 避免阻塞事件循环
+        answer = await asyncio.wait_for(
+            asyncio.to_thread(consult_graph.run, question, history),
+            timeout=60.0
+        )
+    except asyncio.TimeoutError:
+        error_id = str(uuid.uuid4())[:8]
+        logger.error(f"[Consult] 问诊超时 (error_id={error_id})")
         return {
-            "success": True,
+            "success": False,
             "result": {
-                "answer": answer,
+                "answer": f"⏱️ 智能问诊超时（60秒），请稍后重试。（错误ID：{error_id}）",
                 "tools_used": [],
                 "plan": {"question": question, "mode": "consult"},
                 "tool_results": []
@@ -785,16 +834,39 @@ async def consult(req: ChatRequest, request: Request):
             "trace": {"executor": []}
         }
     except Exception as e:
+        error_id = str(uuid.uuid4())[:8]
+        logger.error(f"[Consult] 问诊异常: {e} (error_id={error_id})", exc_info=True)
         return {
             "success": False,
             "result": {
-                "answer": f"问诊处理失败：{str(e)}",
+                "answer": f"❌ 智能问诊服务暂时不可用，请稍后重试。（错误ID：{error_id}）",
                 "tools_used": [],
                 "plan": {"question": question, "mode": "consult"},
                 "tool_results": []
             },
             "trace": {"executor": []}
         }
+
+    # 保存会话历史
+    session_id = request.headers.get("X-Session-ID")
+    if session_id:
+        try:
+            save_conversation(session_id, "user", question, conversation_type="consult")
+            save_conversation(session_id, "assistant", answer, conversation_type="consult")
+            logger.info(f"[历史记录] 已保存智能问诊会话 {session_id}")
+        except Exception as e:
+            logger.error(f"[历史记录] 保存失败: {e}")
+
+    return {
+        "success": True,
+        "result": {
+            "answer": answer,
+            "tools_used": [],
+            "plan": {"question": question, "mode": "consult"},
+            "tool_results": []
+        },
+        "trace": {"executor": []}
+    }
 
 # =========================
 # 审批列表接口（用于前端侧边栏）
@@ -1145,13 +1217,14 @@ async def get_approval_detail(approval_id: str, request: Request):
                 success=False,
                 error=f"您没有权限查看此审批项"
             )
-        
+        from utils.crypto import decrypt_if_needed
+        content = decrypt_if_needed(row[2]) if row[2] else ""
         return ApprovalDetailResponse(
             success=True,
             data={
                 "id": row[0],
                 "title": row[1],
-                "content": row[2],
+                "content": content,
                 "type": row[3],
                 "requester": row[4],
                 "requester_role": row[5],

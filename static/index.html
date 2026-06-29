@@ -491,71 +491,99 @@
         // ============================================================
         // 发送消息
         // ============================================================
-        async function send() {
-            const input = document.getElementById('question');
-            const q = input.value.trim();
-            if (!q) return;
-            input.value = '';
-            input.style.height = '42px';
+       async function send() {
+        const input = document.getElementById('question');
+        const q = input.value.trim();
+        if (!q) return;
+        input.value = '';
+        input.style.height = '42px';
 
-            let convType = 'quick';
-            if (currentTab === 'approval') convType = 'approval';
-            else if (currentMode === 'consult') convType = 'consult';
+        let convType = 'quick';
+        if (currentTab === 'approval') convType = 'approval';
+        else if (currentMode === 'consult') convType = 'consult';
 
-            const key = getCurrentConversationKey();
-            const conv = conversations[key];
+        const key = getCurrentConversationKey();
+        const conv = conversations[key];
 
-            renderMessage('user', q, null, null);
-            conv.push({ role: 'user', content: q, tools: null });
+        renderMessage('user', q, null, null);
+        conv.push({ role: 'user', content: q, tools: null });
 
-            const thisRequestId = ++activeRequestId;
-            const traceSessionId = 'trace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-            const traceQuestion = q.length > 200 ? q.substring(0, 200) + '...' : q;
+        const thisRequestId = ++activeRequestId;
+        const traceSessionId = 'trace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const traceQuestion = q.length > 200 ? q.substring(0, 200) + '...' : q;
 
+        try {
+            // 启动 trace
             try {
-                try {
-                    const traceResp = await fetch('/trace/start', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ session_id: traceSessionId, question: traceQuestion })
-                    });
-                    if (!traceResp.ok) console.warn('[Trace] 启动失败');
-                    else console.log('[Trace] 启动成功:', traceSessionId);
-                } catch (traceErr) { console.warn('[Trace] 启动失败:', traceErr); }
-
-                let endpoint = currentTab === 'approval' ? '/ask' : (currentMode === 'quick' ? '/ask' : '/consult');
-
-                const resp = await fetch(endpoint, {
+                const traceResp = await fetch('/trace/start', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Session-ID': SESSION_ID,
-                        'X-Conversation-Type': convType,
-                        'X-Trace-ID': traceSessionId
-                    },
-                    body: JSON.stringify({
-                        question: q,
-                        history: conv.slice(0, -1)
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: traceSessionId, question: traceQuestion })
                 });
-                const data = await resp.json();
+                if (!traceResp.ok) console.warn('[Trace] 启动失败');
+                else console.log('[Trace] 启动成功:', traceSessionId);
+            } catch (traceErr) { console.warn('[Trace] 启动失败:', traceErr); }
 
-                if (thisRequestId !== activeRequestId) return;
+            let endpoint = currentTab === 'approval' ? '/ask' : (currentMode === 'quick' ? '/ask' : '/consult');
 
-                const answer = data.result?.answer || '请求失败：请检查后端日志';
-                const toolsUsed = data.result?.tools_used || [];
-                renderMessage('assistant', answer, toolsUsed, traceSessionId);
-                conv.push({ role: 'assistant', content: answer, tools: toolsUsed });
+            // ===== 前端超时控制 =====
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 65000);
 
-                if (currentTab === 'approval') setTimeout(refreshApprovals, 1000);
+            const resp = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-ID': SESSION_ID,
+                    'X-Conversation-Type': convType,
+                    'X-Trace-ID': traceSessionId
+                },
+                body: JSON.stringify({
+                    question: q,
+                    history: conv.slice(0, -1)
+                }),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            if (thisRequestId !== activeRequestId) return;
+
+            const data = await resp.json();
+
+            // ===== 检查后端返回的 success 字段 =====
+            if (data.success === false) {
+                const errorMsg = data.result?.answer || '请求处理失败，请重试';
+                renderMessage('assistant', errorMsg, null, null);
+                conv.push({ role: 'assistant', content: errorMsg, tools: null });
                 saveCurrentSession();
-
-            } catch (err) {
-                if (thisRequestId !== activeRequestId) return;
-                renderMessage('assistant', '请求失败：' + err.message, null, null);
-                conv.push({ role: 'assistant', content: '请求失败：' + err.message, tools: null });
+                if (currentTab === 'approval') setTimeout(refreshApprovals, 1000);
+                return;
             }
+
+            const answer = data.result?.answer || '请求失败：请检查后端日志';
+            const toolsUsed = data.result?.tools_used || [];
+            renderMessage('assistant', answer, toolsUsed, traceSessionId);
+            conv.push({ role: 'assistant', content: answer, tools: toolsUsed });
+
+            if (currentTab === 'approval') setTimeout(refreshApprovals, 1000);
+            saveCurrentSession();
+
+        } catch (err) {
+            if (thisRequestId !== activeRequestId) return;
+
+            let errorMsg = '❌ 请求失败：';
+            if (err.name === 'AbortError') {
+                errorMsg += '⏱️ 请求超时（65秒），请稍后重试。';
+            } else if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+                errorMsg += '🌐 网络连接失败，请检查服务是否正常运行。';
+            } else {
+                errorMsg += err.message || '未知错误，请重试。';
+            }
+            renderMessage('assistant', errorMsg, null, null);
+            conv.push({ role: 'assistant', content: errorMsg, tools: null });
+            saveCurrentSession();
         }
+    }
 
         // ============================================================
         // 回车发送 & 自动调整高度

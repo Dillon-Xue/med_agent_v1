@@ -8,7 +8,7 @@
 
 > **V3 新特性**：多租户隔离 + 自动审批闭环。支持不同租户（医院/科室）数据隔离，对话驱动的审批管理，评估表生成后自动创建审批项，侧边栏实时展示待审批列表。
 
-> **V4 新特性**：多 Agent 协作（Supervisor + 心外科/药剂科/全科 Agent 并行执行）、单元测试全覆盖。
+> **V4 新特性**：多 Agent 协作（Supervisor + 心外科/药剂科/全科 Agent 并行执行）、单元测试全覆盖、数据回流
 
 ## 技术栈
 
@@ -56,8 +56,7 @@
 | **多Agent协同（V4）** | 独立出全科、心外科、药剂科三个agent，对接在快速对话窗口 |
 | **对接飞书（V4）** | 可对接至飞书，在飞书中进行问答 |
 | **同对话框话题切换（V4）** | 识别当前问题和历史问题的相关性，避免历史问答干扰 |
-
-
+| **数据回流（V4）** | 历史对话数据回流，供新的患者用药参考 |
 
 ## 架构图
 ```mermaid
@@ -269,9 +268,9 @@ med_agent_v1/
 │   ├── executor.py          # 异步并行执行
 │   ├── synthesizer.py       # LLM答案合成
 │   ├── consult_graph.py     # LangGraph智能问诊
-│   ├── supervisor.py        # 🆕 多Agent路由
-│   ├── agent_factory.py     # 🆕 科室Agent工厂
-│   ├── aggregator.py        # 🆕 多Agent结果综合
+│   ├── supervisor.py        # 多Agent路由
+│   ├── agent_factory.py     # 科室Agent工厂
+│   ├── aggregator.py        # 多Agent结果综合
 │   └── state.py             # LangGraph状态定义
 ├── tools/
 │   ├── base_tool.py         # 工具基类（重试+降级）
@@ -284,6 +283,7 @@ med_agent_v1/
 │   ├── approval_tool.py     # 审批管理
 │   ├── file_tool.py         # 文件解析
 │   ├── retriever.py         # 混合检索（向量+BM25）
+│   ├── memory_tool.py       # L4语义记忆（V4.1）
 │   └── tool_registry.py     # 工具注册表
 ├── utils/
 │   ├── config.py            # LLM客户端工厂
@@ -291,25 +291,25 @@ med_agent_v1/
 │   ├── response.py          # 统一响应格式
 │   ├── crypto.py            # 敏感数据加密
 │   └── audit.py             # 审计日志
-├── tests/                   # 🆕 单元测试
+├── tests/                   # 单元测试
 │   ├── conftest.py          # Mock夹具
 │   ├── test_planner.py      # 18个用例
 │   ├── test_executor.py     # 4个用例
 │   ├── test_synthesizer.py  # 7个用例
 │   ├── test_retriever.py    # 4个用例
-│   └── test_base_tool.py    # 覆盖重试降级
+│   └── test_base_tool.py    # 重试降级用例
 ├── static/
 │   └── index.html           # 前端SPA
+├── feishu_adapter.py        # 飞书适配层（V4.0.1）
 ├── chat.py                  # FastAPI主入口
 ├── ingest.py                # 向量库构建
 ├── init.sql                 # 数据库建表
-├── dockerfile               # 🆕 集成测试
+├── dockerfile               # 集成测试
 ├── docker-compose.yml
-├── requirements.txt         # 🆕 含pytest依赖
+├── requirements.txt         # 含pytest依赖
 └── README.md
 ```
 
 # 待完善事项
-- L4语义记忆
 - 真实权限管理（RBAC）
 - LLM 权限隔离
