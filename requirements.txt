@@ -1,26 +1,41 @@
-fastapi
-uvicorn[standard]
-openai
-langchain-chroma
-langchain-community
-dashscope
-python-dotenv
-pypdf
-pydantic
-tenacity
-pymysql
-aiocache
-prometheus-client==0.20.0
-python-docx==1.1.2
-langgraph>=0.2.0
+# ===== Web 框架 =====
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
 python-multipart>=0.0.6
-python-docx>=0.8.11
-openpyxl>=3.0.0
-rank_bm25
-httpx
-requests
+
+# ===== LLM 相关 =====
+openai>=1.0.0
+dashscope>=1.14.0
+
+# ===== LangChain / Agent =====
+langchain-chroma>=0.1.0
+langchain-community>=0.0.20
+langgraph>=0.2.0
+
+# ===== 向量检索 =====
+rank_bm25>=0.2.2
+
+# ===== 配置与工具 =====
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+tenacity>=8.2.0
+httpx>=0.24.0
+requests>=2.31.0
 cryptography>=41.0.0
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
-pytest-cov>=4.0.0
+
+# ===== 缓存 =====
+aiocache>=0.12.0
+
+# ===== 数据库 =====
+pymysql>=1.1.0
+
+# ===== 文档处理 =====
+pypdf>=4.0.0
+python-docx>=1.1.0
+openpyxl>=3.0.0
+
+# ===== 监控 =====
+prometheus-client==0.20.0
+
+# ===== 飞书集成 =====
 lark-channel-sdk>=1.0.0

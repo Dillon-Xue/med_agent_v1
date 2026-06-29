@@ -428,7 +428,7 @@ async def ask(req: ChatRequest, request: Request):
     import asyncio
     import uuid
     logger.info(f"[ASK] ==== 请求开始 ====")
-    logger.error(f"[ASK] 所有 headers: {request.headers}")
+    logger.debug(f"[ASK] 所有 headers: {request.headers}")
     logger.info(f"[ASK] X-Trace-ID: {request.headers.get('X-Trace-ID')}")
     global current_session_user
     question = req.question.strip()
@@ -480,10 +480,10 @@ async def ask(req: ChatRequest, request: Request):
     # 3. 审批指令拦截
     approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
     if any(kw in question for kw in approval_keywords):
-        logger.warning(f"[Chat] 拦截到审批指令，直接处理: {question}")
+        logger.info(f"[Chat] 拦截到审批指令，直接处理: {question}")
         session_id = request.headers.get("X-Session-ID")
         conv_type = request.headers.get("X-Conversation-Type", "unknown")
-        logger.warning(f"[Chat] 审批拦截 - session_id: {session_id}, conv_type: {conv_type}")
+        logger.info(f"[Chat] 审批拦截 - session_id: {session_id}, conv_type: {conv_type}")
 
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
@@ -684,11 +684,11 @@ async def _execute_ask(question: str, history: list, trace_id: str, cache_key: s
                 except Exception as e:
                     logger.error(f"[Trace] 缓存命中记录失败: {e}")
         else:
-            logger.warning(f"[Cache] 未命中缓存，执行完整流程，问题：{question}")
+            logger.info(f"[Cache] 未命中缓存，执行完整流程，问题：{question[:50]}")
             result = await process_question(question, history, trace_callback=trace_callback if trace_id else None)
             cache.set(cache_key, result, ttl=3600)
     else:
-        logger.warning(f"[Cache] 不适合缓存，执行完整流程，问题：{question}")
+        logger.info(f"[Cache] 不适合缓存，执行完整流程，问题：{question[:50]}")
         result = await process_question(question, history, trace_callback=trace_callback if trace_id else None)
 
     return result
