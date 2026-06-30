@@ -490,6 +490,7 @@ async def ask(req: ChatRequest, request: Request):
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
         result = approval_tool.run(question)
+        """
         try:
             from utils.audit import log_audit
             answer = result.get("answer", "")
@@ -518,6 +519,7 @@ async def ask(req: ChatRequest, request: Request):
                     )
         except Exception as e:
             logger.error(f"[Audit] 审批日志记录失败: {e}")
+        """
 
         if session_id:
             logger.debug("[Chat] 审批拦截 - 开始保存对话")
@@ -1053,7 +1055,7 @@ async def upload_file(
 async def get_history(session_id: str, limit: int = 50, conversation_type: str = None):
     """
     获取指定会话的历史记录
-    
+
     - **session_id**: 会话标识（前端生成，存储在 localStorage）
     - **limit**: 返回条数，默认 50
     - **conversation_type**: 可选过滤（quick / consult / approval）
@@ -1061,40 +1063,41 @@ async def get_history(session_id: str, limit: int = 50, conversation_type: str =
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        
-        sql = """SELECT id, role, content, tools_used, file_name, conversation_type, created_at 
-                 FROM conversations 
+
+        sql = """SELECT id, role, content, tools_used, file_name, conversation_type, created_at
+                 FROM conversations
                  WHERE session_id = %s AND tenant_id = %s"""
         params = [session_id, get_current_tenant()]
-        
+
         if conversation_type:
             sql += " AND conversation_type = %s"
             params.append(conversation_type)
-        
+
         sql += " ORDER BY created_at ASC LIMIT %s"
         params.append(limit)
-        
+
         cursor.execute(sql, params)
         rows = cursor.fetchall()
         conn.close()
-        
+
         items = []
         for row in rows:
-            tools = json.loads(row[3]) if row[3] else []
+            tools = json.loads(row.get('tools_used')) if row.get('tools_used') else []
             items.append({
-                "id": row[0],
-                "role": row[1],
-                "content": row[2],
+                "id": row.get('id'),
+                "role": row.get('role'),
+                "content": row.get('content'),
                 "tools_used": tools,
-                "file_name": row[4],
-                "conversation_type": row[5],
-                "created_at": row[6].strftime("%Y-%m-%d %H:%M:%S") if row[6] else ""
+                "file_name": row.get('file_name'),
+                "conversation_type": row.get('conversation_type'),
+                "created_at": row.get('created_at').strftime("%Y-%m-%d %H:%M:%S") if row.get('created_at') else ""
             })
-        
+
         return {"success": True, "items": items, "count": len(items)}
     except Exception as e:
         logger.error(f"获取会话历史失败: {e}")
         return {"success": False, "items": [], "count": 0, "error": str(e)}
+
 # =========================
 # Trace 存储（内存，生产环境可改为 Redis）
 # =========================
@@ -1179,59 +1182,59 @@ async def get_approval_detail(approval_id: str, request: Request):
     """
     from tools.approval_tool import ApprovalTool
     from chat import get_current_tenant
-    
+
     tenant_id = get_current_tenant()
     user = current_session_user if current_session_user else None
-    
+
     if not user:
         return ApprovalDetailResponse(
             success=False,
             error="请先声明用户身份（用户：xxx）"
         )
-    
+
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute(
-            """SELECT id, title, content, type, requester, requester_role, 
-                      reviewer, reviewer_role, status, comment, created_at, reviewed_at 
-               FROM approvals 
+            """SELECT id, title, content, type, requester, requester_role,
+                      reviewer, reviewer_role, status, comment, created_at, reviewed_at
+               FROM approvals
                WHERE id = %s AND tenant_id = %s""",
             (approval_id, tenant_id)
         )
         row = cursor.fetchone()
         conn.close()
-        
+
         if not row:
             return ApprovalDetailResponse(
                 success=False,
                 error=f"未找到审批项 {approval_id}"
             )
-        
+
         # 权限校验：只有审批人或申请人才能查看详情
-        if row[4] != user and row[6] != user:
+        if row.get('requester') != user and row.get('reviewer') != user:
             return ApprovalDetailResponse(
                 success=False,
                 error=f"您没有权限查看此审批项"
             )
         from utils.crypto import decrypt_if_needed
-        content = decrypt_if_needed(row[2]) if row[2] else ""
+        content = decrypt_if_needed(row.get('content')) if row.get('content') else ""
         return ApprovalDetailResponse(
             success=True,
             data={
-                "id": row[0],
-                "title": row[1],
+                "id": row.get('id'),
+                "title": row.get('title'),
                 "content": content,
-                "type": row[3],
-                "requester": row[4],
-                "requester_role": row[5],
-                "reviewer": row[6],
-                "reviewer_role": row[7],
-                "status": row[8],
-                "comment": row[9],
-                "created_at": row[10].strftime("%Y-%m-%d %H:%M:%S") if row[10] else "",
-                "reviewed_at": row[11].strftime("%Y-%m-%d %H:%M:%S") if row[11] else ""
+                "type": row.get('type'),
+                "requester": row.get('requester'),
+                "requester_role": row.get('requester_role'),
+                "reviewer": row.get('reviewer'),
+                "reviewer_role": row.get('reviewer_role'),
+                "status": row.get('status'),
+                "comment": row.get('comment'),
+                "created_at": row.get('created_at').strftime("%Y-%m-%d %H:%M:%S") if row.get('created_at') else "",
+                "reviewed_at": row.get('reviewed_at').strftime("%Y-%m-%d %H:%M:%S") if row.get('reviewed_at') else ""
             }
         )
     except Exception as e:

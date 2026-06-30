@@ -10,6 +10,7 @@ class ApprovalTool:
 
     def _get_connection(self):
         return get_connection()
+
     def _get_doctor_id(self) -> str:
         """获取当前医生ID（用于数据隔离）"""
         try:
@@ -51,12 +52,12 @@ class ApprovalTool:
         tenant_id = self._get_tenant()
         doctor_id = self._get_doctor_id()
         reviewer = reviewer or requester
-        content_encrypted = encrypt_if_needed(content)  # 🆕 加密
+        content_encrypted = encrypt_if_needed(content)
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO approvals (id, title, content, type, requester, reviewer, doctor_id, tenant_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (approval_id, title, content_encrypted, type, requester, reviewer, doctor_id, tenant_id)  # 🆕 使用加密后的 content
+            (approval_id, title, content_encrypted, type, requester, reviewer, doctor_id, tenant_id)
         )
         conn.commit()
         conn.close()
@@ -73,7 +74,7 @@ class ApprovalTool:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, title, requester, created_at FROM approvals "
-            "WHERE tenant_id = %s AND reviewer = %s  AND status = 'pending' "
+            "WHERE tenant_id = %s AND reviewer = %s AND status = 'pending' "
             "ORDER BY created_at DESC",
             (tenant_id, user)
         )
@@ -82,10 +83,10 @@ class ApprovalTool:
         logger.info(f"[ApprovalTool.list_pending_by_user] 查询到 {len(rows)} 条记录")
         # 将 created_at 转换为字符串格式
         return [{
-            "id": row[0],
-            "title": row[1],
-            "requester": row[2],
-            "created_at": row[3].strftime("%Y-%m-%d %H:%M:%S") if row[3] else ""
+            "id": row.get("id"),
+            "title": row.get("title"),
+            "requester": row.get("requester"),
+            "created_at": row.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else ""
         } for row in rows]
 
     def list_pending(self, query: str = "") -> dict:
@@ -95,9 +96,9 @@ class ApprovalTool:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, title, requester, created_at FROM approvals "
-            "WHERE tenant_id = %s AND reviewer = %s  AND status = 'pending' "
+            "WHERE tenant_id = %s AND reviewer = %s AND status = 'pending' "
             "ORDER BY created_at DESC",
-            (tenant_id, user,)
+            (tenant_id, user)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -110,7 +111,7 @@ class ApprovalTool:
 
         lines = ["📋 待审批列表（等待您审批）："]
         for row in rows:
-            lines.append(f"  [{row[0]}] {row[1]} - 申请人：{row[2]} - {row[3]}")
+            lines.append(f"  [{row.get('id')}] {row.get('title')} - 申请人：{row.get('requester')} - {row.get('created_at')}")
         lines.append("\n输入「审批通过 [编号]」或「驳回 [编号] [原因]」")
         return build_response(
             answer="\n".join(lines),
@@ -140,7 +141,7 @@ class ApprovalTool:
 
         lines = ["📋 已通过审批列表："]
         for row in rows:
-            lines.append(f"  [{row[0]}] {row[1]} - 申请人：{row[2]} - 审批时间：{row[4]}")
+            lines.append(f"  [{row.get('id')}] {row.get('title')} - 申请人：{row.get('requester')} - 审批时间：{row.get('reviewed_at')}")
         return build_response(
             answer="\n".join(lines),
             source="approval",
@@ -156,7 +157,7 @@ class ApprovalTool:
             "SELECT id, title, requester, comment, created_at, reviewed_at FROM approvals "
             "WHERE tenant_id = %s AND reviewer = %s AND status = 'rejected' "
             "ORDER BY reviewed_at DESC",
-            (tenant_id, user, doctor_id)
+            (tenant_id, user)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -169,8 +170,8 @@ class ApprovalTool:
 
         lines = ["📋 已驳回审批列表："]
         for row in rows:
-            comment = row[3] or "未填写原因"
-            lines.append(f"  [{row[0]}] {row[1]} - 申请人：{row[2]} - 驳回原因：{comment}")
+            comment = row.get('comment') or "未填写原因"
+            lines.append(f"  [{row.get('id')}] {row.get('title')} - 申请人：{row.get('requester')} - 驳回原因：{comment}")
         return build_response(
             answer="\n".join(lines),
             source="approval",
@@ -200,9 +201,9 @@ class ApprovalTool:
         status_map = {"approved": "✅ 已通过", "rejected": "❌ 已驳回"}
         lines = ["📋 已审批列表（已完成）："]
         for row in rows:
-            status_text = status_map.get(row[3], row[3])
-            lines.append(f"  [{row[0]}] {row[1]} - {status_text}")
-            lines.append(f"    申请人：{row[2]} | {row[5]}")
+            status_text = status_map.get(row.get('status'), row.get('status'))
+            lines.append(f"  [{row.get('id')}] {row.get('title')} - {status_text}")
+            lines.append(f"    申请人：{row.get('requester')} | {row.get('reviewed_at')}")
         return build_response(
             answer="\n".join(lines),
             source="approval",
@@ -232,9 +233,9 @@ class ApprovalTool:
         status_map = {"pending": "⏳ 待审批", "approved": "✅ 已通过", "rejected": "❌ 已驳回"}
         lines = ["📋 全部审批列表（您作为审批人）："]
         for row in rows:
-            status_text = status_map.get(row[3], row[3])
-            lines.append(f"  [{row[0]}] {row[1]} - {status_text}")
-            lines.append(f"    申请人：{row[2]} | {row[4]}")
+            status_text = status_map.get(row.get('status'), row.get('status'))
+            lines.append(f"  [{row.get('id')}] {row.get('title')} - {status_text}")
+            lines.append(f"    申请人：{row.get('requester')} | {row.get('created_at')}")
         return build_response(
             answer="\n".join(lines),
             source="approval",
@@ -263,19 +264,19 @@ class ApprovalTool:
                 source="approval",
                 success=False
             )
-        logger.debug(f"[DEBUG] approve - 当前记录: id={row[0]}, reviewer={row[1]}, status={row[2]}")
+        logger.debug(f"[DEBUG] approve - 当前记录: id={row.get('id')}, reviewer={row.get('reviewer')}, status={row.get('status')}")
 
-        if row[1] != user:
+        if row.get('reviewer') != user:
             conn.close()
             return build_response(
-                answer=f"❌ 您不是 {approval_id} 的审批人（当前审批人：{row[1]}）",
+                answer=f"❌ 您不是 {approval_id} 的审批人（当前审批人：{row.get('reviewer')}）",
                 source="approval",
                 success=False
             )
-        if row[2] != "pending":
+        if row.get('status') != "pending":
             conn.close()
             return build_response(
-                answer=f"❌ {approval_id} 当前状态为 {row[2]}，无法审批",
+                answer=f"❌ {approval_id} 当前状态为 {row.get('status')}，无法审批",
                 source="approval",
                 success=False
             )
@@ -298,9 +299,9 @@ class ApprovalTool:
                 )
                 approval_row = cursor.fetchone()
                 if approval_row:
-                    content = approval_row[0]
-                    approval_type = approval_row[1]
-                    requester = approval_row[2]
+                    content = approval_row.get('content')
+                    approval_type = approval_row.get('type')
+                    requester = approval_row.get('requester')
 
                     # 仅对用药评估类型触发数据回流
                     if approval_type == "medication_evaluation":
@@ -335,7 +336,6 @@ class ApprovalTool:
             source="approval",
             success=False
         )
-
 
     # ===== 🆕 数据回流辅助方法 =====
     def _write_to_memory(self, approval_id: str, content: str, requester: str, doctor_id: str):
@@ -410,19 +410,19 @@ class ApprovalTool:
                 source="approval",
                 success=False
             )
-        logger.debug(f"[DEBUG] reject - 当前记录: id={row[0]}, reviewer={row[1]}, status={row[2]}")
+        logger.debug(f"[DEBUG] reject - 当前记录: id={row.get('id')}, reviewer={row.get('reviewer')}, status={row.get('status')}")
 
-        if row[1] != user:
+        if row.get('reviewer') != user:
             conn.close()
             return build_response(
-                answer=f"❌ 您不是 {approval_id} 的审批人（当前审批人：{row[1]}）",
+                answer=f"❌ 您不是 {approval_id} 的审批人（当前审批人：{row.get('reviewer')}）",
                 source="approval",
                 success=False
             )
-        if row[2] != "pending":
+        if row.get('status') != "pending":
             conn.close()
             return build_response(
-                answer=f"❌ {approval_id} 当前状态为 {row[2]}，无法驳回",
+                answer=f"❌ {approval_id} 当前状态为 {row.get('status')}，无法驳回",
                 source="approval",
                 success=False
             )
@@ -460,7 +460,6 @@ class ApprovalTool:
         )
 
     def run(self, query: str) -> dict:
-        # 直接使用原始 query，不提取“当前问题”
         logger.debug(f"[DEBUG] ApprovalTool.run - 收到查询: {query[:200]}...")
 
         # 1. 列表查询
@@ -475,7 +474,7 @@ class ApprovalTool:
         if "全部列表" in query or "所有审批" in query:
             return self.list_all(query)
 
-        # 2. 审批操作（直接匹配，不依赖“当前问题”）
+        # 2. 审批操作
         match = re.search(r'审批通过\s*[:：]?\s*([A-Z0-9\-]+)', query)
         if match:
             approval_id = match.group(1)
