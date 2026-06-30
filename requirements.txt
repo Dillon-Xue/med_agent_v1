@@ -28,7 +28,7 @@ aiocache>=0.12.0
 
 # ===== 数据库 =====
 pymysql>=1.1.0
-DBUtils>=3.0.0
+DBUtils
 
 # ===== 文档处理 =====
 pypdf>=4.0.0

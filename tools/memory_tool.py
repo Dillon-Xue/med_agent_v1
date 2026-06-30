@@ -63,17 +63,24 @@ class MemoryTool:
             trace=self.get_trace()
         )
 
-    def recall(self, query: str, k: int = 3, doctor_id: str = None) -> List[dict]:
+    def recall(self, query: str, k: int = 3, doctor_id: str = None, min_similarity: float = 0.0) -> List[dict]:
         self.clear_trace()
         try:
             docs = self.vectordb.similarity_search_with_score(query, k=k * 2)
             if doctor_id:
                 docs = [(doc, score) for doc, score in docs if doc.metadata.get("doctor_id") == doctor_id]
-            docs = docs[:k]
-            return [
-                {"content": doc.page_content, "metadata": doc.metadata, "score": score}
-                for doc, score in docs
-            ]
+            results = []
+            for doc, score in docs:
+                similarity = 1 - score
+                if similarity < min_similarity:
+                    continue
+                results.append({
+                    "content": doc.page_content,
+                    "metadata": doc.metadata,
+                    "score": score,
+                    "similarity": similarity
+                })
+            return results[:k]
         except Exception as e:
             return []
 

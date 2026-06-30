@@ -359,7 +359,7 @@ class ConsultGraph:
         try:
             doctor_id = getattr(chat_module, 'current_session_user', 'default')
             memory_tool = MemoryTool()
-            results = memory_tool.recall(original_question, k=2, doctor_id=doctor_id)
+            results = memory_tool.recall(original_question, k=2, doctor_id=doctor_id, min_similarity=0.3)
             if results:
                 memory_lines = ["【历史参考病例】"]
                 for r in results:

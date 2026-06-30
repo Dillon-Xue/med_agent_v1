@@ -5,7 +5,7 @@
 import os
 import logging
 import pymysql
-from dbutils.pooled_db import PooledDB
+from DBUtils.PooledDB import PooledDB
 
 logger = logging.getLogger(__name__)
 

@@ -7,6 +7,9 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 COPY requirements.txt .
 RUN pip install --no-cache-dir --default-timeout=100 -r requirements.txt
 
+RUN pip install DBUtils
+
+
 COPY . .
 
 # 构建阶段运行测试

@@ -320,7 +320,7 @@ async def process_question(question: str, history: list, trace_callback=None) ->
         from tools.memory_tool import MemoryTool
         doctor_id = current_session_user if current_session_user else None
         memory_tool = MemoryTool()
-        results = memory_tool.recall(question, k=2, doctor_id=doctor_id)
+        results = memory_tool.recall(question, k=2, doctor_id=doctor_id, min_similarity=0.3)
         if results:
             memory_lines = ["【历史参考病例】"]
             for r in results:

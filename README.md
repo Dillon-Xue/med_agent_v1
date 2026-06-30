@@ -313,3 +313,4 @@ med_agent_v1/
 # 待完善事项
 - 真实权限管理（RBAC）
 - LLM 权限隔离
+- audit日志记录
