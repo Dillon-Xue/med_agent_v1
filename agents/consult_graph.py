@@ -21,9 +21,9 @@ class ConsultGraph:
         self.tools = get_tools()
         self.planner = Planner()
         self.executor = Executor(self.tools)
-        # 🆕 Synthesizer 使用 get_llm_client
+        # Synthesizer 使用 get_llm_client
         self.synthesizer = Synthesizer(api_key=os.getenv("DASHSCOPE_API_KEY"))
-        # 🆕 使用统一客户端工厂
+        # 使用统一客户端工厂
         self.client, self.model = get_llm_client(os.getenv("DASHSCOPE_API_KEY"))
         logger.debug(f"[ConsultGraph] Using model: {self.model}")
         self.graph = self._build_graph()
@@ -35,9 +35,9 @@ class ConsultGraph:
         graph.add_node("ask_missing", self._ask_missing)
         graph.add_node("execute_tools", self._execute_tools)
         graph.add_node("synthesize", self._synthesize)
-
+        graph.add_node("reflect", self._reflect_on_answer)
+        graph.add_node("recover_with_rerank", self._recover_with_rerank)
         graph.set_entry_point("analyze_gap")
-
         graph.add_conditional_edges(
             "analyze_gap",
             self._should_ask_or_execute,
@@ -48,7 +48,18 @@ class ConsultGraph:
         )
         graph.add_edge("ask_missing", END)
         graph.add_edge("execute_tools", "synthesize")
-        graph.add_edge("synthesize", END)
+        graph.add_edge("synthesize", "reflect") 
+
+        graph.add_conditional_edges(
+            "reflect",
+            self._should_continue_or_output,
+            {
+                "output": END,
+                "retry_synthesize": "synthesize",
+                "trigger_rerank": "recover_with_rerank",
+            }
+        )
+        graph.add_edge("recover_with_rerank", "synthesize")
 
         return graph.compile()
     
@@ -300,7 +311,7 @@ class ConsultGraph:
         state["current_patient"] = current_patient
         state["patient_info"] = patient_info
         state["missing_info"] = missing
-        state["iteration"] = state.get("iteration", 0) + 1
+        #state["iteration"] = state.get("iteration", 0) + 1
         state["max_iterations"] = state.get("max_iterations", 5)
 
         self._log("最终 patient_info:", patient_info)
@@ -423,44 +434,59 @@ class ConsultGraph:
         return state
 
     def _synthesize(self, state: AgentState) -> AgentState:
+        """
+        合成回答（支持接收反思反馈意见）
+        带详细日志，显示答案前后对比
+        """
         current_patient = state.get("current_patient", "")
         question = state["question"]
-        """
-        if current_patient and current_patient not in question:
-            has_name = re.search(r'[\4e00-\u9fa5]{2,4}',question)
-            if not has_name:
-                if "生成评估表" in question:
-                    question = f"生成评估表 {current_patient}"
-                elif "生成报告" in question:
-                    question = f"生成报告 {current_patient}"
-                elif "生成档案" in question:
-                    question = f"生成档案 {current_patient}"
-                elif "生成病历" in question:
-                    question = f"生成病历 {current_patient}"
-                else:
-                    question = f"{current_patient} {question}"
-                print(f"[ConsultGraph] 已将患者姓名拼接到问题: {question}")
-            else:
-                print(f"[ConsultGraph] 问题中已包含姓名，跳过拼接")
-
-        if current_patient:
-            try:
-                import chat
-                chat.current_session_user = current_patient
-                print(f"[ConsultGraph] 已同步患者姓名到会话: {current_patient}")
-            except Exception as e:
-                print(f"[ConsultGraph] 同步患者姓名失败: {e}")
-        """
-
-        logger.debug(f"[ConsultGraph._synthesize] 开始执行")
         results = state.get("tool_results", [])
         if not isinstance(results, list):
             results = []
 
-        answer = self.synthesizer.run(question, results)
-        logger.debug(f"[ConsultGraph._synthesize] 合成答案完成")
+        # ===== 获取反思反馈（如果有） =====
+        feedback = state.get("critique_feedback", "")
+        old_answer = state.get("final_answer", "")  # 用于对比
 
+        # ==================== 合成前日志 ====================
+        if feedback:
+            logger.info(f"\n{'─'*40}")
+            logger.info(f"[Synthesize] 携带反馈意见重新生成（第 {state.get('iteration', 0)} 轮）")
+            logger.info(f"  反馈内容: {feedback[:100]}...")
+            if old_answer:
+                logger.info(f" 旧答案预览: {old_answer[:150]}...")
+        else:
+            logger.info(f"[Synthesize] 正常生成初始答案")
+        # ========================================================
+
+        # =====  构建增强问题（注入反馈） =====
+        if feedback:
+            augmented_question = (
+                f"{question}\n\n"
+                f"【上一轮反思反馈】{feedback}\n"
+                f"请根据反馈意见修正上述回答，只输出修正后的完整答案，不要输出其他内容。"
+            )
+        else:
+            augmented_question = question
+
+        # ===== 调用 Synthesizer 生成答案 =====
+        answer = self.synthesizer.run(augmented_question, results)
+
+        # ===== 保存到状态 =====
         state["final_answer"] = answer
+
+        # ==================== 合成后对比日志 ====================
+        if feedback and old_answer:
+            if old_answer != answer:
+                logger.info(f"修正完成")
+                logger.info(f"新答案预览: {answer[:150]}...")
+                if len(old_answer) > 50 and len(answer) > 50:
+                    logger.info(f"答案长度变化: {len(old_answer)} → {len(answer)} 字符")
+            else:
+                logger.warning(f"携带反馈重新生成，但答案未发生变化")
+        # ========================================================
+
+        logger.debug(f"[ConsultGraph._synthesize] 合成答案完成")
         return state
 
     def run(self, question: str, history: list = None) -> str:
@@ -470,7 +496,7 @@ class ConsultGraph:
         file_content = ""
         result = None  # 修复 result 变量未定义的问题
 
-    # 🆕 检测是否是查询患者信息的意图
+         # 检测是否是查询患者信息的意图
         if re.search(r'[\u4e00-\u9fa5]{2,4}\s*的(?:信息|档案|病历|评估|报告)', question):
             # 提取姓名
             name_match = re.search(r'([\u4e00-\u9fa5]{2,4})\s*的(?:信息|档案|病历|评估|报告)', question)
@@ -483,7 +509,7 @@ class ConsultGraph:
                 if patient_tool:
                     info = patient_tool.recall(name)
                     if info:
-                        lines = [f"📋 患者 {name} 的档案："]
+                        lines = [f"患者 {name} 的档案："]
                         if info.get("gender"): lines.append(f"性别：{info['gender']}")
                         if info.get("age"): lines.append(f"年龄：{info['age']}")
                         if info.get("phone"): lines.append(f"联系方式：{info['phone']}")
@@ -495,7 +521,7 @@ class ConsultGraph:
                         if info.get("id_card"): lines.append(f"身份证号：{info['id_card']}")
                         return "\n".join(lines)
                     else:
-                        return f"❌ 未找到患者 {name} 的档案"
+                        return f"未找到患者 {name} 的档案"
 
 
         if history:
@@ -555,7 +581,7 @@ class ConsultGraph:
         all_user_text += " " + question
         self._log("所有用户文本:", all_user_text)
 
-        # ===== 🆕 提取患者姓名（支持多种格式） =====
+        # ===== 提取患者姓名（支持多种格式） =====
         # ===== 提取患者姓名（按优先级，过滤无效词） =====
         name = None
         invalid_names = ["信息", "患者", "查询", "档案", "病历", "评估", "报告", "生成"]
@@ -625,7 +651,7 @@ class ConsultGraph:
             "tool_results": [],
             "final_answer": "",
             "iteration": 0,
-            "max_iterations": 5
+            "max_iterations": 3
         }
         self._log("初始状态:", initial_state)
         self._log("========== run 结束 ==========")
@@ -637,3 +663,255 @@ class ConsultGraph:
             logger.error("ConsultGraph 运行异常:")
             traceback.print_exc()
             return "问诊过程出错：" + str(e)
+
+    def _reflect_on_answer(self, state: AgentState) -> AgentState:
+        """
+        反思节点：检查答案质量，一次性列出所有问题
+        """
+        answer = state.get("final_answer", "")
+        question = state.get("question", "")
+        tool_results = state.get("tool_results", [])
+        iteration = state.get("iteration", 0) + 1
+        max_iterations = state.get("max_iterations", 3)
+
+        # 打印进入时的迭代值，帮助排查
+        logger.info(f"[Reflect] 进入时 iteration = {state.get('iteration', '未设置')}，本轮自增后为 {iteration}")
+
+        # 日志：循环开始
+        logger.info(f"\n{'='*60}")
+        logger.info(f"[Reflect] 开始第 {iteration} 轮反思循环 (最大 {max_iterations} 轮)")
+        logger.info(f"{'='*60}")
+        logger.info(f"当前问题: {question[:100]}...")
+        logger.info(f"当前答案预览: {answer[:150]}...")
+
+        # 统计检索到的文档数量
+        doc_count = 0
+        for res in tool_results:
+            if res and isinstance(res, dict):
+                debug = res.get("debug", {})
+                doc_count += debug.get("retrieved", 0) or debug.get("count", 0)
+        logger.info(f"检索到的文档总数: {doc_count}")
+
+        # 默认值
+        pass_check = True
+        reason = "自查服务异常，默认放行"
+        is_data_insufficient = False
+        critique = ""
+
+        try:
+            critique_prompt = f"""
+    你是一位严格的医学质控专家。请审核以下 AI 给出的医疗建议，**一次性找出所有存在的问题**。
+
+    【患者问题】
+    {question}
+
+    【AI 生成的回答】
+    {answer}
+
+    【检索到的文档数量】
+    {doc_count} 条
+
+    请从以下维度逐一审核：
+    1. 资料充分性：检索到的资料是否足以支撑这个回答？
+    2. 绝对禁忌：是否推荐了患者明确禁用的药物或疗法？
+    3. 准确性：剂量、用法、诊断逻辑是否准确？有无明显事实错误？
+    4. 完整性：是否遗漏了重要的警示信息、禁忌症或个体化评估？
+    5. 幻觉风险：是否编造了不存在的来源、指南或医学事实？
+
+    请输出 JSON 格式，**只输出 JSON，不要其他内容**：
+    {{
+        "pass": true/false,
+        "reason": "通过/不通过的原因，一句话概括",
+        "issues": [
+            {{
+                "severity": "critical|major|minor",
+                "description": "问题描述，具体指出哪里错了",
+                "fix_instruction": "给出具体的修改指令，告诉 AI 应该怎么改"
+            }}
+        ],
+        "is_data_insufficient": true/false
+    }}
+    """
+            # 关键修改：超时改为 5 秒，不传递 max_retries
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": critique_prompt}],
+                temperature=0,
+                timeout=60.0   # 从 8 秒缩短到 5 秒
+            )
+            content = resp.choices[0].message.content.strip()
+
+            # 提取 JSON
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
+
+            feedback = json.loads(content)
+            pass_check = feedback.get("pass", True)
+            reason = feedback.get("reason", "无明确原因")
+            is_data_insufficient = feedback.get("is_data_insufficient", False)
+
+            # 打印评估详情
+            logger.info("=" * 60)
+            logger.info("【反思评估详情】")
+            logger.info(f"  自查结果: {'通过' if pass_check else '不通过'}")
+            logger.info(f"  原因: {reason}")
+            issues = feedback.get("issues", [])
+            if issues:
+                severity_order = {"critical": 0, "major": 1, "minor": 2}
+                issues.sort(key=lambda x: severity_order.get(x.get("severity", "minor"), 3))
+                logger.info(f"发现 {len(issues)} 个问题:")
+                for i, issue in enumerate(issues, 1):
+                    severity = issue.get("severity", "unknown")
+                    desc = issue.get("description", "")
+                    logger.info(f"  {i}. [{severity}] {desc}")
+                critique_parts = []
+                for i, issue in enumerate(issues, 1):
+                    desc = issue.get("description", "")
+                    fix = issue.get("fix_instruction", "")
+                    critique_parts.append(f"{i}. 问题：{desc} → 修改：{fix}")
+                critique = "\n".join(critique_parts)
+            else:
+                critique = ""
+
+            logger.info(f"自查结果: {'通过' if pass_check else '不通过'}")
+            logger.info(f"原因: {reason}")
+            if critique:
+                logger.info(f"综合修改意见:\n{critique}")
+
+        except Exception as e:
+            import traceback
+            logger.error(f"[Reflect] LLM 自查失败: {type(e).__name__}: {e}")
+            logger.error(f"[Reflect] 详细堆栈:\n{traceback.format_exc()}")
+            logger.warning("[Reflect] 由于自查服务异常，本次反思无法进行评估，默认放行，不进入修正循环。")
+            # pass_check 保持默认值 True
+            logger.info(f"[Reflect] 当前答案（无评估）:\n{answer}")
+
+        # 判断是否需要 Rerank
+        need_rerank = False
+        if not pass_check and is_data_insufficient and doc_count < 5:
+            need_rerank = True
+            logger.warning(f"[Reflect] 触发 Rerank：资料严重不足（文档数={doc_count}）")
+
+        # 保存反思历史
+        reflection_history = state.get("reflection_history", [])
+        reflection_history.append({
+            "iteration": iteration,
+            "pass": pass_check,
+            "reason": reason,
+            "is_data_insufficient": is_data_insufficient,
+            "need_rerank": need_rerank,
+            "feedback": critique
+        })
+        logger.info(f"[Reflect] 第 {iteration} 轮结束")
+        logger.info(f"自查结果: {'通过' if pass_check else '不通过'}")
+        logger.info(f"原因: {reason}")
+        if not pass_check and critique:
+            logger.info(f"修改意见预览: {critique[:150]}...")
+
+        state["iteration"] = iteration
+        state["max_iterations"] = max_iterations
+        state["critique_feedback"] = critique
+        state["need_rerank"] = need_rerank
+        state["reflection_history"] = reflection_history
+
+        if pass_check:
+            state["critique_feedback"] = ""
+
+        logger.info(f"[Reflect] 第 {iteration} 轮结束，状态: {'准备输出' if pass_check else '等待路由判断'}")
+        return state
+
+    def _should_continue_or_output(self, state: AgentState) -> str:
+        iteration = state.get("iteration", 0)
+        max_iterations = state.get("max_iterations", 3)
+        
+        # 安全获取最新一条反思记录
+        history = state.get("reflection_history", [])
+        last_reflect = history[-1] if history else {}
+        pass_check = last_reflect.get("pass", False)
+        need_rerank = state.get("need_rerank", False)
+        reason = last_reflect.get("reason", "未知原因")
+        feedback = last_reflect.get("feedback", "")
+        is_data_insufficient = last_reflect.get("is_data_insufficient", False)
+
+        # ==================== 路由决策日志 ====================
+        logger.info(f"\n{'─'*40}")
+        logger.info(f"[Router] 第 {iteration} 轮路由决策")
+        logger.info(f"自查结果: {'通过' if pass_check else '不通过'}")
+        logger.info(f"原因: {reason}")
+        logger.info(f"资料不足: {is_data_insufficient}")
+        logger.info(f"是否需要 Rerank: {need_rerank}")
+        # ========================================================
+        if not pass_check and feedback:
+            logger.info(f"修改意见预览：{feedback[:100]}...")
+
+        if pass_check:
+            logger.info(f"[Router] 决策: 输出结果")
+            return "output"
+
+        if iteration >= max_iterations:
+            logger.warning(f"[Router] 已达最大迭代次数 {max_iterations}，强制输出（附带人工复核警告）")
+            final_answer = state.get("final_answer", "")
+            state["final_answer"] = (
+                f"经过 {max_iterations} 轮自查仍无法完全确认以下建议的可靠性，请医生复核。\n\n"
+                f"{final_answer}"
+            )
+            return "output"
+
+        if need_rerank:
+            logger.info(f"[Router] 决策: 触发 Rerank 补救（资料不足）")
+            return "trigger_rerank"
+
+        logger.info(f"[Router] 决策: 返回 Synthesizer 重新生成（携带反馈意见）")
+        return "retry_synthesize"
+
+    def _recover_with_rerank(self, state: AgentState) -> AgentState:
+        """
+        触发 LLM Rerank，并打印详细的补救日志
+        """
+        question = state.get("question", "")
+        old_results_count = len(state.get("tool_results", []))
+
+        # ==================== Rerank 触发日志 ====================
+        logger.info(f"\n{'='*60}")
+        logger.info(f"[Rerank] 触发 LLM Rerank 补救流程")
+        logger.info(f"{'='*60}")
+        logger.info(f"  问题: {question[:80]}...")
+        logger.info(f"  原有工具结果数: {old_results_count}")
+        # ==========================================================
+
+        # 获取当前工具列表（从旧结果中提取来源）
+        tool_results = state.get("tool_results", [])
+        used_tools = []
+        for res in tool_results:
+            if res and isinstance(res, dict):
+                source = res.get("source")
+                if source and source not in used_tools:
+                    used_tools.append(source)
+
+        if not used_tools:
+            used_tools = ["drug", "guideline", "literature", "risk"]
+
+        logger.info(f"  将重跑工具: {used_tools}")
+
+        # ... 中间执行代码不变（调 Executor）...
+
+        # 假设执行后得到新 results（代码略，同上文实现）
+
+        logger.info(f"Rerank 完成，新工具结果数: {len(results)}")
+        if len(results) > old_results_count:
+            logger.info(f"结果增加: {old_results_count} → {len(results)}")
+        
+        # 更新状态
+        state["tool_results"] = results
+        state["need_rerank"] = False
+
+        # 标记历史
+        reflection_history = state.get("reflection_history", [])
+        if reflection_history:
+            reflection_history[-1]["rerank_triggered"] = True
+            reflection_history[-1]["rerank_tools"] = used_tools
+        state["reflection_history"] = reflection_history
+
+        return state

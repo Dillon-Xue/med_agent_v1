@@ -528,7 +528,7 @@
 
             // ===== 前端超时控制 =====
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 65000);
+            const timeoutId = setTimeout(() => controller.abort(), 300000);
 
             const resp = await fetch(endpoint, {
                 method: 'POST',

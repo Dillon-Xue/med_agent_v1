@@ -567,7 +567,7 @@ async def ask(req: ChatRequest, request: Request):
             return {
                 "success": False,
                 "result": {
-                    "answer": "❌ 无法解析患者信息，请使用格式：记住患者 张三：60岁，男，肚子痛",
+                    "answer": "无法解析患者信息，请使用格式：记住患者 张三：60岁，男，肚子痛",
                     "tools_used": [],
                     "plan": {"question": question, "tools": []},
                     "tool_results": []
@@ -723,7 +723,7 @@ async def consult(req: ChatRequest, request: Request):
             return {
                 "success": True,
                 "result": {
-                    "answer": f"✅ 已识别当前用户：{current_session_user}",
+                    "answer": f"已识别当前用户：{current_session_user}",
                     "tools_used": [],
                     "plan": {"question": question, "tools": []},
                     "tool_results": []
@@ -748,7 +748,7 @@ async def consult(req: ChatRequest, request: Request):
             return {
                 "success": True,
                 "result": {
-                    "answer": "⚠️ 当前未识别用户，请先声明身份：用户：doctor_张",
+                    "answer": "当前未识别用户，请先声明身份：用户：doctor_张",
                     "tools_used": [],
                     "plan": {"question": question, "tools": []},
                     "tool_results": []
@@ -780,7 +780,7 @@ async def consult(req: ChatRequest, request: Request):
             return {
                 "success": False,
                 "result": {
-                    "answer": "❌ 无法解析患者信息，请使用格式：记住患者 张三：60岁，男，肚子痛",
+                    "answer": "无法解析患者信息，请使用格式：记住患者 张三：60岁，男，肚子痛",
                     "tools_used": [],
                     "plan": {"question": question, "tools": []},
                     "tool_results": []
@@ -822,7 +822,7 @@ async def consult(req: ChatRequest, request: Request):
         # 60秒超时，用 to_thread 避免阻塞事件循环
         answer = await asyncio.wait_for(
             asyncio.to_thread(consult_graph.run, question, history),
-            timeout=60.0
+            timeout=300.0
         )
     except asyncio.TimeoutError:
         error_id = str(uuid.uuid4())[:8]
@@ -830,7 +830,7 @@ async def consult(req: ChatRequest, request: Request):
         return {
             "success": False,
             "result": {
-                "answer": f"⏱️ 智能问诊超时（60秒），请稍后重试。（错误ID：{error_id}）",
+                "answer": f"智能问诊超时（60秒），请稍后重试。（错误ID：{error_id}）",
                 "tools_used": [],
                 "plan": {"question": question, "mode": "consult"},
                 "tool_results": []
@@ -843,7 +843,7 @@ async def consult(req: ChatRequest, request: Request):
         return {
             "success": False,
             "result": {
-                "answer": f"❌ 智能问诊服务暂时不可用，请稍后重试。（错误ID：{error_id}）",
+                "answer": f"智能问诊服务暂时不可用，请稍后重试。（错误ID：{error_id}）",
                 "tools_used": [],
                 "plan": {"question": question, "mode": "consult"},
                 "tool_results": []
