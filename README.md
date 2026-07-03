@@ -245,6 +245,7 @@ flowchart TD
     F3 --> G[返回结果 + trace追踪信息]
 ```
 #### 智能问诊（/consult）
+```mermaid
 flowchart TD
     A[进入 LangGraph 状态机] --> B[analyze_gap<br>LLM+正则提取信息，分析缺口]
     B --> C{是否存在缺失信息<br>且未超限轮次？}
@@ -260,8 +261,10 @@ flowchart TD
     K --> L{累计是否超过3轮？}
     L -->|否| G
     L -->|是| M[强制输出 + 人工复核警示]
+```
 
 #### 评估表+审批+数据回流
+```mermaid
 flowchart TD
     A["用户指令：生成评估表 张三"] --> B["正则提取姓名 → search_patients 查询患者档案"]
     B --> C["_generate_from_candidate 执行流程：<br>① 解密敏感字段<br>② 填充 info_dict<br>③ drug_tool 获取用药参考<br>④ LLM 生成评估内容<br>⑤ 填充 Word 模板"]
@@ -270,8 +273,10 @@ flowchart TD
     E --> F{审批结果判定}
     F -->|审批通过| G["_write_to_memory 数据回流：<br>① 解密评估 content<br>② 正则提取结构化字段<br>③ memory_tool.remember 存入语义记忆库"]
     F -->|驳回| H["流程终止，记录驳回信息"]
+```    
 
 #### V4多Agent协作架构
+```mermaid
 graph TD
     A[用户] --> B[FastAPI/ask]
     B --> C[Supervisor路由]
@@ -296,8 +301,10 @@ graph TD
     G3 --> H
 
     H --> I[返回最终答案]
+```
 
 #### 反思循环逻辑
+```mermaid
 flowchart TD
     A[用户提问] --> B[基础检索（向量+BM25，无LLM Rerank）]
     B --> C[【第1轮】Synthesizer生成答案]
@@ -317,6 +324,7 @@ flowchart TD
     K -->|自查通过| E
     K -->|自查仍不通过| L[最多再修正一轮，累计上限3轮]
     L --> M[强制输出结果 + 人工复核警示]
+```
 
 ### 3.5 知识库搭建
 
