@@ -128,15 +128,15 @@
 
 >**业务实现**：系统不会拿到问题就直接回答。它会先分析：年龄知道吗？过敏史知道吗？在吃什么药？——如果信息不够，它会像医生一样追问，补全了再给出建议。
 
-**代码设计**：`agents/consult_graph.py`定义LangGraph状态机，节点包括：
-```
+**代码设计**：`agents/consult_graph.py` 定义LangGraph状态机，节点流转：
 analyze_gap（LLM+正则提取患者信息，分析年龄/过敏史/用药史缺口）
-→_should_ask_or_execute（缺失且未超限→ask_missing，否则→execute_tools）
-→synthesize（综合工具结果+feedback注入）
-→reflect（医学质控5维度审核）
-→pass→输出
-→不通过→修正循环或Rerank，最多3轮
-```
+→ _should_ask_or_execute 逻辑判断
+    ├→ 信息缺失且未超限 → ask_missing 追问补充信息 → 重回状态机开头
+    └→ 信息完整 → execute_tools 执行检索
+→ synthesize（综合工具结果 + 注入feedback修正信息）
+→ reflect（医学质控5维度审核）
+    ├→ 审核通过 → 输出回答
+    └→ 审核不通过 → 修正循环或Rerank，最多迭代3轮，回到synthesize
 
 #### ④多科室会诊（Multi-Agent）
 
@@ -152,21 +152,15 @@ analyze_gap（LLM+正则提取患者信息，分析年龄/过敏史/用药史缺
 分层结构（自下而上）：
 
 ```
-接入层：Web前端(static/index.html)+飞书适配器(feishu_adapter.py)
-↓
+接入层：Web前端+飞书适配器
+  ↓
 接口层：FastAPI—/ask,/consult,/upload,/approvals,/history,/health,/metrics
-↓
-编排层：LangChain+LangGraph
-Planner-Executor-Synthesizer（快速问答）
-ConsultGraph状态机（智能问诊）
-Supervisor路由+Aggregator聚合（多Agent）
-↓
-工具层：drug_tool/guideline_tool/literature_tool/risk_tool
-patient_tool/report_tool/approval_tool/file_tool
-memory_tool/rag_tool/retriever
-↓
-数据层：MySQL(patients/approvals/conversations/audit_logs)
-Chroma向量库(drug/guideline/literature/risk)
+  ↓
+编排层：LangChain+LangGraph、Planner-Executor-Synthesizer、ConsultGraph状态机、Supervisor路由+Aggregator聚合
+  ↓
+工具层：drug/guideline/literatur/risk
+  ↓
+数据层：MySQL、Chroma向量库
 ```
 
 **业务对照**：
