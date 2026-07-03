@@ -1,16 +1,377 @@
-# 基于RAG+LangGraph的多Agent协作医学问答平台
+# 医生/患者的Agent助手
 
-## 项目简介
+> 一个能查药、问诊、写报告、审方案的智能医学问答平台
 
-本项目是一个基于 **LangChain + FastAPI + Chroma** 构建的医疗领域智能问答 Agent。系统采用 **Planner-Executor-Synthesizer** 三层架构，能够并行调用药物、指南、文献、风险、患者档案等多个专业工具，提供准确、可溯源的医学信息回答。
+---
 
-> **V2 新增特性**：基于LangGraph实现多轮交互式智能问诊，主动提取并追问患者缺失信息（年龄、过敏史、用药史），生成个性化用药建议。
+## 第一篇：背景概述
 
-> **V3 新特性**：多租户隔离+自动审批闭环。支持不同租户（医院/科室）数据隔离，对话驱动的审批管理，评估表生成后自动创建审批项，侧边栏实时展示待审批列表，评审列表通过/驳回，持久化会话历史，日志和数据加密存储，本地和云上模型切换
+### 1.1 场景：一个每天都在发生的故事
 
-> **V4 新特性**：多Agent协作（Supervisor+心外科/药剂科/全科Agent并行执行），单元/集成测试全覆盖，数据回流，增加反思LOOP，飞书对接
+上午 10 点，门诊医生王大夫正在看第 15 个病人。患者说：「我高血压，最近头疼，能吃布洛芬吗？」
 
-## 技术栈
+王大夫需要打开**药品说明书系统**查布洛芬禁忌——3 分钟。打开**临床指南库**查高血压用药建议——2 分钟。再查**药物相互作用**——又 2 分钟。三个系统，七分钟过去了，后面还排着 20 个病人。
+
+更糟的是，王大夫忙起来可能会忘了问：「您多大年龄？」「有没有药物过敏？」「目前在吃别的药吗？」——这三个问题，每一个都可能改变用药决策。
+
+> 这就是全国数万家医院每天都在上演的场景。这个项目的目标很简单：**把「七分钟 + 三个系统」变成「一句话 + 十秒钟」。**
+
+### 1.2 我们做了什么
+
+一个基于 **RAG + LangGraph 的多 Agent 协作医学问答平台**。医生只需要像跟同事说话一样，对着对话框输入问题，系统自动完成以下事情：
+
+- **并行检索**药品说明书、临床指南、医学文献、药物相互作用库
+- **综合所有来源**生成回答，每条信息标注出处
+- **主动追问**缺失的患者信息（年龄、过敏史、用药史）
+- **生成评估报告**并自动进入审批流程
+- **沉淀经验**，审批通过的方案供后续相似病例参考
+
+### 1.3 一句话讲清楚
+
+> 把原来需要切换三四个系统、花几分钟才能查到的医学信息，变成一句自然语言对话，十秒内给出有据可查的答案。AI 负责检索和初筛，人做最终决策。
+
+### 1.4 适用场景
+
+| 场景 | 以前怎么做 | 现在怎么做 | 技术能力 |
+|------|-----------|-----------|----------|
+| 查药品/指南/文献 | 切换三四个系统分别查 | 一句话提问，自动并行查所有来源 | Planner-Executor-Synthesizer |
+| 患者用药评估 | 凭经验口头问，易遗漏 | 系统自动分析缺口并追问 | LangGraph 多轮状态机 |
+| 写评估报告 | 手写或复制粘贴，十几分钟 | 输入名字，自动生成 Word 报告 | ReportTool + Word 模板填充 |
+| 审批用药方案 | 纸质签字，找人难 | 在线提交，审批人手机就能批 | ApprovalTool + 对话驱动 |
+| 多科室会诊 | 分别咨询各科室 | 一次提问，心外/药剂/全科并行给出观点 | Supervisor + Multi-Agent |
+| 参考历史病例 | 靠医生个人记忆 | 自动推荐相似病例的用药经验 | L4 语义记忆 + 数据回流 |
+
+### 1.5 技术栈
+
+| 组件 | 技术 | 选型理由 |
+|------|------|----------|
+| Web 框架 | FastAPI + Uvicorn | 原生异步、类型注解、Swagger 自动生成 |
+| LLM | 阿里云 DashScope (qwen-plus) | 中文医疗场景效果好、兼容 OpenAI API |
+| 嵌入模型 | text-embedding-v4 | 中文语义向量表现稳定 |
+| 向量数据库 | Chroma | 轻量、本地可运行、适合 PoC/MVP |
+| 关系数据库 | MySQL 8.0 | 成熟稳定，适合患者/审批等结构化数据 |
+| Agent 框架 | LangChain + LangGraph | 工具抽象好、状态机适合多轮问诊 |
+| 容器化 | Docker + Docker Compose | 一键部署、环境隔离、便于交付 |
+| 监控 | Prometheus | 云原生标准、易于接入 Grafana |
+
+---
+
+## 第二篇：需求分析
+
+### 2.1 目标用户和场景
+
+| 用户 | 最头疼的事 | 系统帮他们做什么 |
+|------|-----------|-----------------|
+| 门诊医生 | 查药查指南要切三四个系统 | 一个对话框搞定所有查询 |
+| 全科医生 | 怕漏问过敏史/用药史导致误判 | 系统自动分析缺口并追问 |
+| 药师 | 大量用药方案需要审核 | 在线审批，手机就能操作 |
+| 科室主任 | 审批流程纸质、找人难 | 自动提醒，在线通过/驳回 |
+| 医院信息科 | 多科室共用，数据安全难保证 | 自带多租户隔离和加密 |
+
+### 2.2 功能需求
+
+- **医学问答**：drug / guideline / literature / risk / patient 多工具协同回答
+- **智能问诊**：LangGraph 主动追问缺失信息，生成个性化建议
+- **患者档案**：记住 / 查询 / 追加患者信息，身份证号 + 手机号 Fernet 加密
+- **评估表生成**：Word 模板自动填充，输出 .docx 并支持在线预览
+- **审批管理**：自动创建审批项，支持通过 / 驳回，对话驱动
+- **文件解析**：图片 / PDF 上传，LLM 提取患者信息并归档
+- **多 Agent 协作**：Supervisor 路由 + 心外 / 药剂 / 全科 Agent 并行 + Aggregator 聚合
+- **数据回流**：审批通过后解密写入 memory_tool 语义记忆向量库
+
+### 2.3 非功能需求
+
+| 需求 | 要求 | 实现方式 |
+|------|------|----------|
+| 准确性 | 回答基于检索资料，标注来源 | RAG + 来源标注 + 反思机制 |
+| 响应速度 | 秒级 | 并行执行 + SimpleCache + 60s 超时 |
+| 数据安全 | 敏感字段加密，权限隔离 | Fernet 加密 + tenant_id + doctor_id 过滤 |
+| 可审计 | 关键操作留痕 | `audit_logs` 表 + `log_audit()` |
+| 可扩展 | 支持新增工具、科室 Agent | `tool_registry.py` + `agent_factory.py` |
+| 可运维 | 健康检查、指标暴露、日志轮转 | `/health` + `/metrics` + `RotatingFileHandler` |
+
+### 2.4 三个核心痛点
+
+**痛点一：信息查不全、查得慢。** 医生要打开三四个系统才能回答一个「能不能吃」的问题。业务上，这是效率杀手；技术上，这要求系统能**并行调用多源异构工具**。
+
+**痛点二：AI 会「胡说八道」。** 大模型可能编造一个不存在的指南名称或药物剂量——医疗场景零容忍。技术上，这意味着必须用 **RAG 约束回答范围 + 来源强制标注 + 反思自查**。
+
+**痛点三：经验留不住。** 张医生治疗过的成功病例，李医生完全不知道。好的经验随人走。技术上，这需要**审批通过后的数据回流机制**，将用药方案写入向量记忆库。
+
+---
+
+## 第三篇：方案与设计
+
+### 3.1 核心思路：让 AI 当「助理」，人做「决策」
+
+四个关键设计，每个解决一个具体问题：
+
+#### ① 查资料而不是编答案（RAG）
+
+> **业务实现**：AI 的回答不是「自己想出来的」，而是从药品说明书、临床指南、医学文献中检索出来的。每条信息后面都标着【来源：xxx】——就像论文的参考文献。如果找不到来源，就老老实实标【来源：模型推理，请核实】。
+
+**技术实现**：`tools/rag_tool.py` + `tools/retriever.py`。采用 Chroma 向量库 + BM25 混合检索。`Synthesizer` 的 `system_prompt` 强制要求只能使用工具返回的资料，禁止编造指南名称或期刊名称。检索流程为：LLM 查询改写（2-3 个多角度查询）→ 向量检索（多查询召回去重）→ BM25 混合重排序（0.6×向量相似度 + 0.4×BM25）→ 反思触发 LLM Rerank。
+
+#### ② 一个大脑调度多个工具箱（Agent）
+
+> **业务实现**：系统会自动判断问题需要查哪些资料——药品？指南？文献？冲突检测？——然后**同时**去查，不用一个一个来。就像一个医生同时派几个实习生分别去查不同的资料，然后汇总。
+
+**技术实现**：`agents/planner.py` 采用规则 + LLM 混合规划（规则快速低成本可解释，LLM 兜底不确定场景）。`agents/executor.py` 通过 `asyncio.gather` 并行执行多工具，60s 超时兜底。`agents/synthesizer.py` 综合各工具结果，根据 `specialty` 参数注入科室视角。
+
+#### ③ 像经验丰富的医生一样追问（LangGraph）
+
+> **业务实现**：系统不会拿到问题就直接回答。它会先分析：年龄知道吗？过敏史知道吗？在吃什么药？——如果信息不够，它会像医生一样追问，补全了再给出建议。
+
+**技术实现**：`agents/consult_graph.py` 定义 LangGraph 状态机，节点包括：
+
+```
+analyze_gap（LLM+正则提取患者信息，分析年龄/过敏史/用药史缺口）
+  → _should_ask_or_execute（缺失且未超限 → ask_missing，否则 → execute_tools）
+  → synthesize（综合工具结果 + feedback 注入）
+  → reflect（医学质控 5 维度审核）
+    → pass → 输出
+    → 不通过 → 修正循环或 Rerank，最多 3 轮
+```
+
+#### ④ 多科室会诊（Multi-Agent）
+
+> **业务实现**：同一个问题，心外科、药剂科、全科各给出自己的专业意见，最后汇总成一个综合建议——就像医院里的多学科会诊（MDT）。
+
+**技术实现**：`agents/supervisor.py` 通过 LLM 判断问题归属，路由到 `cardiology` / `pharmacy` / `general`。`agents/agent_factory.py` 为每个科室创建独立 Agent（含带 specialty 参数的 Planner 和 Synthesizer）。`agents/aggregator.py` 聚合多科室观点，标注分歧。
+
+### 3.2 系统架构
+
+分层结构（自下而上）：
+
+```
+接入层：Web 前端 (static/index.html) + 飞书适配器 (feishu_adapter.py)
+  ↓
+接口层：FastAPI — /ask, /consult, /upload, /approvals, /history, /health, /metrics
+  ↓
+编排层：LangChain + LangGraph
+         Planner-Executor-Synthesizer（快速问答）
+         ConsultGraph 状态机（智能问诊）
+         Supervisor 路由 + Aggregator 聚合（多 Agent）
+  ↓
+工具层：drug_tool / guideline_tool / literature_tool / risk_tool
+        patient_tool / report_tool / approval_tool / file_tool
+        memory_tool / rag_tool / retriever
+  ↓
+数据层：MySQL (patients / approvals / conversations / audit_logs)
+        Chroma 向量库 (drug / guideline / literature / risk)
+```
+
+**业务对照**：
+
+| 分层 | 业务对照 |
+|----|------|
+| 数据层 | 系统的「记忆」——存患者档案和医学知识 |
+| 工具层 | 系统的「工具箱」——能查药、查指南、查文献、查冲突 |
+| 编排层 | 系统的「大脑」——决定什么时候用什么工具，怎么整合结果 |
+| 接口层 | 系统的「嘴巴和耳朵」——接收问题，给出回答 |
+| 接入层 | 系统的「入口」——网页端和飞书都能用 |
+
+### 3.3 代码模块职责
+
+| 目录/文件 | 职责 |
+|-----------|------|
+| `agents/` | Agent 编排与状态机：planner、executor、synthesizer、consult_graph、supervisor、agent_factory、aggregator |
+| `tools/` | 业务工具：drug、guideline、literature、risk、patient、report、approval、file、memory、retriever、rag、base_tool、tool_registry |
+| `utils/` | 基础设施：config（LLM 客户端工厂+云/本地模型切换）、database（DBUtils 连接池）、crypto（Fernet 加解密）、audit（审计日志）、response（统一响应+脱敏）、embeddings |
+| `chat.py` | FastAPI 主入口：路由、CORS、租户上下文、trace 存储、metrics 中间件 |
+| `feishu_adapter.py` | 飞书事件订阅 + 消息处理 |
+| `tests/` | pytest 单元测试 + 集成测试 |
+
+### 3.4 核心流程与技术
+
+#### 快速问答（/ask）
+
+```
+用户提交问题
+  → 话题切换检测（关键词重叠度判断是否截断历史）
+  → 患者档案加载（MySQL 查询）
+  → L4 语义记忆检索（memory_tool.recall）
+  → Supervisor 路由（cardiology / pharmacy / general）
+  → 科室 Agent：Planner 选工具 → Executor asyncio.gather 并行 → Synthesizer 合成
+  → 返回结果 + trace
+```
+
+#### 智能问诊（/consult）
+
+```
+进入 LangGraph 状态机
+  → analyze_gap（LLM+正则提取信息，分析缺口）
+  → 有缺失且未超限 → ask_missing（追问年龄/过敏史/用药史）
+  → 信息完整 → execute_tools（并行调用 drug/guideline/literature/risk）
+  → synthesize（综合结果 + 历史参考病例注入）
+  → reflect（5 维度医学质控自查）
+    → pass → 输出
+    → 不通过 → 修正循环或 LLM Rerank，最多 3 轮
+```
+
+#### 评估表 + 审批 + 数据回流
+
+```
+「生成评估表 张三」
+  → 正则提取姓名 → search_patients
+  → _generate_from_candidate（解密字段 → 填充 info_dict → drug_tool 获取药物参考 → LLM 生成评估内容 → 填充 Word 模板）
+  → 自动 create 审批项（type=medication_evaluation, status=pending）
+  → 审批人 approve（校验 reviewer + status）
+  → 审批通过后 _write_to_memory（解密 content → 正则提取字段 → memory_tool.remember）
+```
+
+### 3.5 知识库搭建
+
+- **外部知识**：药品说明书、临床指南、医学文献 PDF → `ingest.py` 解析 → DashScope Embedding 向量化 → Chroma 向量库
+- **内部经验**：审批通过的用药方案 → `_write_to_memory` → 写入 memory_tool 语义记忆向量库
+- **检索策略**：LLM 查询改写 → 向量检索去重 → BM25 混合重排序 → LLM Rerank 兜底
+- **知识更新**：新 PDF 放入 data/ 目录 → 重新运行 `ingest.py`
+
+### 3.6 安全设计
+
+| 层面 | 方案 | 实现 |
+|------|------|------|
+| 加密 | Fernet 对称加密，id_card、phone 加密存储，密钥环境变量注入 | `utils/crypto.py` |
+| 多租户 | X-Tenant-ID Header + ContextVar 注入，SQL 同时过滤 tenant_id 和 doctor_id | `chat.py`、`patient_tool.py`、`approval_tool.py` |
+| 审计 | 记录 QUERY/UPDATE/CREATE/APPROVE/REJECT，detail 经 mask_sensitive 脱敏 | `utils/audit.py` → `audit_logs` 表 |
+| 权限 | 审批校验 reviewer==current_user，report_tool 校验 doctor_id 匹配 | `approval_tool.py`、`report_tool.py` |
+
+---
+
+## 第四篇：质量保障
+
+### 4.1 怎么保证不出错
+
+> **业务场景**：医疗场景最怕 AI 「一本正经地胡说八道」。本项目用了三重保障：第一，所有回答必须有据可查，找不到来源就老实标注；第二，系统在给出答案前会自动自查五遍；第三，用药方案必须人工审批才能生效。
+
+#### 三重保障机制
+
+**第一重：RAG 约束 + 来源标注。** `Synthesizer` 的 `system_prompt` 强制要求只能使用工具返回的资料，每条信息末尾标注【来源：xxx】，无法对应时标注【来源：模型推理，请核实】。
+
+**第二重：反思机制。** `consult_graph.py` 的 `reflect` 节点从 5 个维度审核答案：
+
+1. 资料充分性：检索到的资料是否足够支撑回答？
+2. 绝对禁忌：是否推荐了患者明确禁用的药物？
+3. 准确性：剂量、用法、诊断逻辑是否准确？
+4. 完整性：是否遗漏了重要的警示信息？
+5. 幻觉风险：是否编造了不存在的来源或事实？
+
+不通过则进入修正循环或触发 LLM Rerank，`max_iterations=3`。
+
+**第三重：人工审批。** 评估表生成后自动创建审批项，必须经审批人通过才能生效。反思不通过时强制标记「请人工复核」。
+
+### 4.2 测试覆盖
+
+| 模块 | 用例数 | 验证内容 |
+|------|--------|----------|
+| `test_planner.py` | 18 | 规则匹配、LLM 规划、患者/审批/评估表指令识别、specialty 参数 |
+| `test_executor.py` | 4 | asyncio.gather 并行、60s 超时、异常兜底 |
+| `test_synthesizer.py` | 7 | 答案合成、来源标注、report/patient 优先返回、降级处理、specialty 注入 |
+| `test_retriever.py` | 4 | query_rewrite、向量检索、BM25 重排、去重逻辑 |
+| `test_base_tool.py` | - | 重试 + 降级逻辑 |
+| 集成测试 | 4 套 | /ask+/consult 端到端、审批流程、审计日志、患者档案 CRUD |
+
+运行方式：`PYTHONPATH=. pytest tests/ -v`，覆盖率：`pytest tests/ --cov=agents --cov=tools --cov-report=html`
+
+### 4.3 用之前 vs 用之后
+
+| 业务环节 | 用之前 | 用之后 |
+|------|------|------|
+| 查医学资料 | 切换三四个系统，3-5 分钟 | 一句话，十秒 |
+| 收集患者信息 | 口头问，容易漏 | LangGraph 自动分析 + 追问 |
+| 写评估报告 | 手写/复制粘贴，10-15 分钟 | 模板自动生成，< 1 分钟 |
+| 审批方案 | 纸质签字，找人难 | 在线创建 + 通过/驳回，分钟级流转 |
+| 经验沉淀 | 靠人记 | 审批通过 → 自动写入记忆库 |
+| 数据安全 | 无加密无隔离 | Fernet 加密 + 多租户 + 审计 |
+
+---
+
+## 第五篇：交付与运维
+
+### 5.1 迭代过程
+
+| 版本 | 交付内容 | 验收标准 |
+|------|----------|----------|
+| V1 快速问答 | Planner-Executor-Synthesizer + drug/guideline/literature/risk | 多工具协同回答 5 类医学问题 |
+| V2 智能问诊 | LangGraph ConsultGraph + analyze_gap/ask_missing/execute_tools/synthesize | 主动追问 + 生成用药建议 |
+| V3 生产就绪 | 结构化患者档案、评估表生成、自动审批、会话持久化、Fernet 加密 | 通过安全评审和集成测试 |
+| V4 多 Agent | Supervisor 路由、心外/药剂/全科 Agent、反思 LOOP、飞书对接、语义记忆 | 心外/药剂/全科并行协作 |
+
+### 5.2 部署
+
+```bash
+# 本地运行
+pip install -r requirements.txt
+# 配置 .env（DASHSCOPE_API_KEY、数据库密码、CRYPTO_KEY 等）
+uvicorn chat:app --reload
+
+# Docker 一键部署（自动启动 MySQL + medical-agent + ollama + feishu-adapter）
+docker-compose up -d
+```
+
+### 5.3 运维要点
+
+- **监控**：Prometheus `/metrics` 采集请求数/延迟/错误数，按租户拆分，可接 Grafana
+- **日志**：`RotatingFileHandler`（10MB/文件，5 备份），含 tenant_id，`LOG_LEVEL` 可调
+- **备份**：MySQL Docker Volume 定期快照；Chroma 直接复制 `vector_db` 目录
+- **故障处理**：常见问题见表
+
+| 故障 | 原因 | 处理 |
+|------|------|------|
+| /ask 超时 | LLM 响应慢或工具阻塞 | 检查 API Key/网络/超时日志 |
+| 检索无结果 | vector_db 未构建 | 运行 `ingest.py` |
+| 患者查不到 | tenant_id/doctor_id 不匹配 | 检查身份声明和请求头 |
+| 审批列表空 | 非审批人 | 确认 current_session_user == reviewer |
+---
+
+### 5.4 后期维护
+
+- **知识更新**：新 PDF → `data/` 目录 → 重新 `ingest.py`
+- **模型迭代**：收集线上案例 → 构建评测集 → 优化 prompt/检索权重
+- **反馈收集（未实现）**：前端 👍/👎 + trace_id 关联，分析高频错误
+- **数据清理**：定期清理过期会话/无效审批，清理前备份，低峰期执行
+
+
+## 第六篇：价值评估
+
+### 6.1 带来的改变
+
+| 维度 | 具体改变 |
+|------|----------|
+| 效率 | 单次查询从 3-5 分钟 → 10 秒；评估报告从 10-15 分钟 → < 1 分钟；并行执行缩短响应约 70% |
+| 质量 | RAG + 来源标注 + 反思 + 人工审批，四重保障降低用药错误风险 |
+| 成本 | SimpleCache 减少冗余 LLM 调用；ollama 本地模型切换降低云端成本 |
+| 沉淀 | 审批通过的用药方案自动写入记忆库，组织知识从「人脑记忆」变为「系统资产」 |
+
+### 6.2 投入产出
+
+- **投入**：1 名 FDE 约 2-3 个月（V1-V4），DashScope API 按请求量计费，服务器资源
+- **产出**：20 名医生 × 30min/天 = 年省约 2,500 工时，按医生时薪折算，**6-12 个月收回投入**
+- **长期价值**：少一次用药错误、少一个漏诊、多一个可复用的经验——这些价值无法用短期 ROI 衡量
+
+---
+
+## 附录 A：项目技术角度分析
+
+### A.1 技术亮点
+
+| 亮点 | 一句话 | 关键代码 |
+|------|--------|----------|
+| 多 Agent 协作 | Supervisor 路由 + 心外/药剂/全科 Agent 并行 + Aggregator 聚合，模拟 MDT | `agents/supervisor.py`、`agent_factory.py`、`aggregator.py` |
+| LangGraph 状态机 | 问诊 → 缺口分析 → 追问 → 执行 → 合成 → 反思闭环 | `agents/consult_graph.py` |
+| 混合检索 | 向量 + BM25 + 查询改写 + LLM Rerank 四阶段优化 | `tools/retriever.py` |
+| 反思机制 | 5 维度医学质控，最多 3 轮自动修正 | `consult_graph.py` reflect 节点 |
+| 数据回流 | 审批通过 → 解密 → 写入记忆向量库，组织知识持续积累 | `approval_tool.py` _write_to_memory |
+
+### A.2 设计取舍
+
+| 决策 | 选择 | 原因 |
+|------|------|------|
+| Chroma vs ES | Chroma | PoC/MVP 阶段需轻量本地，数据量增大可迁移 |
+| 云端 vs 本地模型 | 默认 qwen-plus，支持 ollama 切换 | 兼顾效果和成本，`get_llm_client` 统一切换 |
+| 规则 vs LLM Planner | 混合 | 规则快速低成本可解释，LLM 兜底不确定场景 |
+
+### A.3 技术栈
 
 | 组件 | 技术 |
 |------|------|
@@ -25,41 +386,9 @@
 | 日志 | RotatingFileHandler (日志轮转) |
 | 测试 | pytest + pytest-asyncio + pytest-cov |
 
-## 核心功能
+---
 
-| 功能 | 描述 |
-|------|------|
-| **多工具协同问答** | 同时调用 drug/guideline/literature/risk 工具回答复杂医学问题 |
-| **LangGraph 智能问诊(V2)** | 多轮对话自动分析信息缺口，主动追问年龄、过敏史、用药史 |
-| **患者档案管理** | 记住、查询、追加患者信息，自动加载档案辅助个性化决策 |
-| **LLM 信息自动抽取** | 从自然对话提取年龄、过敏史、既往用药史，自动归档患者信息 |
-| **多轮对话记忆** | 理解“它”、“他”、“这个”等指代词，连贯承接上下文对话 |
-| **智能规划器** | 规则 + LLM 混合规划，自动选择最优工具调用组合 |
-| **并行执行** | 多工具并发调用，整体响应耗时缩短约 70% |
-| **缓存优化** | 重复问题结果缓存，减少冗余 LLM 调用成本 |
-| **流式输出** | 支持 SSE 逐字流式返回，优化前端交互体验 |
-| **重试降级** | 接口调用异常自动重试，失败兜底返回检索原文片段 |
-| **监控运维** | Prometheus 指标采集 + 日志轮转 + 服务健康检测 |
-| **诊疗评估表生成** | 依托患者档案+Word模板自动生成评估文档，支持下载 |
-| **多租户隔离（V3）** | 患者档案和审批数据按租户隔离，支持多团队共用 |
-| **自动审批（V3）** | 评估表生成后自动创建审批项，对话驱动审批流转 |
-| **文件图内容识别（V3）** | 支持文件和图片上传后识别内容，支持多文件上传 |
-| **会话历史持久化（V3）** | 支持浏览器刷新或重新登录后保留历史会话信息 | 
-| **快速问答增加推理可视化（V3）** | 支持对话窗口查看问题回答的推理过程（未持久化保存）| 
-| **优化rag问答逻辑，提升检索准确率和召回率（V3）** | 查询改写(LLM生成多角度查询) + 混合检索(向量+BM25) + 重排序 | 
-| **待审批列表查看详情（V3）** | 审批助手页面，待审批列表可以单击后查看详情 | 
-| **评估表在线预览功能（V3）** | 智能问诊对话中，增加评估表的在线预览 |
-| **历史会话管理功能（V3）** | 增加多对话能力，每个会话内容各自保存，支持新建和删除对话 |
-| **支持用户隔离（V3）** | 智能问诊支持用户隔离，不同的医生登录，只能查看和编辑各自名下的病人信息 |
-| **日志和数据库中关键信息加密（V3）** | 对患者的身份证号和手机号做加密展示 |
-| **支持对接本地模型，并支持切换（V3）** | 从环境变量修改是本地模型还是云端API |
-| **多Agent协同（V4）** | 独立出全科、心外科、药剂科三个agent，对接在快速对话窗口 |
-| **对接飞书（V4）** | 可对接至飞书，在飞书中进行问答 |
-| **同对话框话题切换（V4）** | 识别当前问题和历史问题的相关性，避免历史问答干扰 |
-| **数据回流（V4）** | 历史对话数据回流，供新的患者用药参考 |
-| **反思LOOP（V4）** | 自动审核初始回答的准确度，不通过则自动进入循环，最多循环3次（可配置） |
-
-## 架构图
+### A.4 架构图
 ```mermaid
 graph TD
     A[用户] --> B[FastAPI /ask]
@@ -77,7 +406,7 @@ graph TD
     E5 --> F
     F --> G[返回最终答案]
 ```
-## V2 LangGraph 交互式问诊架构
+#### V2 LangGraph 交互式问诊架构
 ```mermaid
 graph TD
     A[用户] --> B[FastAPI /consult]
@@ -96,7 +425,7 @@ graph TD
     J --> K
     K --> Z
 ```
-## V3多租户 + 自动审批架构
+#### V3多租户 + 自动审批架构
 
 ```mermaid
 graph TD
@@ -141,7 +470,7 @@ graph TD
     U --> Y[显示结果]
 ```
 
-### V4 多 Agent 协作架构
+#### V4 多 Agent 协作架构
 ```mermaid
 graph TD
     A[用户] --> B[FastAPI /ask]
@@ -169,7 +498,7 @@ graph TD
     H --> I[返回最终答案]
 ```
 
-# 反思循环逻辑
+#### 反思循环逻辑
 ```mermaid
 flowchart TD
     A[用户提问] --> B[基础检索（向量+BM25，无LLM Rerank）]
@@ -191,100 +520,7 @@ flowchart TD
     K -->|自查仍不通过| L[最多再修正一轮，累计上限3轮]
     L --> M[强制输出结果 + 人工复核警示]
 ```  
-
-## 快速开始
-
-### 1. 环境要求
-- Python 3.10+
-- Docker + Docker Compose (可选)
-- 阿里云 DashScope API Key
-
-### 2. 克隆项目
-- git clone https://github.com/Dillon-Xue/med_agent_v1.git
-- cd med_agent_v1
-
-### 3. 配置环境变量
-
-复制 `.env.example` 为 `.env` 并填写：
-
-```bash
-cp .env.example .env
-```
-
-编辑 `.env` 文件：
-
-```env
-# ============================================
-# 阿里云 DashScope 配置
-# ============================================
-DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx   # 你的百炼 API Key
-DASHSCOPE_MODEL=text-embedding-v4               # 嵌入模型
-
-# ============================================
-# 项目路径配置
-# ============================================
-MED_AGENT_ROOT=/mnt/d/Agent/Med_Agent   # 向量库所在目录（本地运行）
-# MED_AGENT_ROOT=/app                           # Docker 容器内使用
-
-# ============================================
-# LLM 模型配置
-# ============================================
-LLM_MODEL_NAME=qwen-plus                        # 对话模型
-EMBEDDING_MODEL_NAME=text-embedding-v4          # 嵌入模型
-
-# ============================================
-# MySQL 数据库配置（患者档案存储）
-# ============================================
-DB_HOST=localhost                               # 数据库地址
-DB_USER=root                                    # 数据库用户名
-DB_PASSWORD=your_strong_password                # 数据库密码
-DB_NAME=patient_db                              # 数据库名称
-
-# ============================================
-# 模型切换
-# ============================================
-OLLAMA_MODEL=qwen2.5:3b                         # 本地模型
-LLM_PROVIDER=dashscope                          # 本地和云上二选一
-#LLM_PROVIDER=ollama
-
-LOG_LEVEL=INFO                                  # 或DEBUG 开启调试日志
-# ============================================
-#对接飞书配置，飞书上机器人的应用信息
-# ============================================
-FEISHU_APP_ID=cli_aa#########bcb
-FEISHU_APP_SECRET=zM6WGA#############gxKq2YJq
-FEISHU_VERIFICATION_TOKEN=e###########3BQ2
-```
-
-### 4. 配置向量库
-#### 需要先将医药相关的PDF文档放入 data/{drug,guideline,literature,risk} 目录
-python ingest.py
-
-### 5. 启动服务
-- 方式一：直接运行
-pip install -r requirements.txt
-uvicorn chat:app --reload
-
-- 方式二：Docker 一键启动
-docker-compose up -d
-
-### 6. 访问前端
-- 问答页面 http://localhost:8000/static/index.html 
-- 接口文档 http://localhost:8000/docs  
-- 状态检查 http://localhost:8000/health   
-- 监控信息 http://localhost:8000/metrics   
-
-### 7. 运行测试
-#### 本地运行单元测试
-PYTHONPATH=. pytest tests/ -v
-
-#### 查看覆盖率
-PYTHONPATH=. pytest tests/ --cov=agents --cov=tools --cov-report=html
-
-#### 容器内运行
-docker exec med_agent bash -c "cd /app && PYTHONPATH=. pytest tests/ -v"
-
-# 项目结构说明
+### A.5 项目结构说明
 ```tree
 med_agent_v1/
 ├── agents/
@@ -333,10 +569,3 @@ med_agent_v1/
 ├── requirements.txt         # 含pytest依赖
 └── README.md
 ```
-
-# 待完善事项
-- 真实权限管理（RBAC）
-- LLM 权限隔离
-- 流式显示回答
-- 结束回答功能
-- 用户反馈功能，👍或者踩
