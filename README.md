@@ -20,11 +20,11 @@
 
 一个基于**RAG+LangGraph的多Agent协作医学问答平台**。医生只需要像跟同事说话一样，对着对话框输入问题，系统自动完成以下事情：
 
--**并行检索**药品说明书、临床指南、医学文献、药物相互作用库
--**综合所有来源**生成回答，每条信息标注出处
--**主动追问**缺失的患者信息（年龄、过敏史、用药史）
--**生成评估报告**并自动进入审批流程
--**沉淀经验**，审批通过的方案供后续相似病例参考
+- **并行检索**药品说明书、临床指南、医学文献、药物相互作用库
+- **综合所有来源**生成回答，每条信息标注出处
+- **主动追问**缺失的患者信息（年龄、过敏史、用药史）
+- **生成评估报告**并自动进入审批流程
+- **沉淀经验**，审批通过的方案供后续相似病例参考
 
 ### 1.3 一句话总结
 
@@ -70,14 +70,14 @@
 
 ### 2.2 功能需求
 
--**医学问答**：drug/guideline/literature/risk/patient多工具协同回答
--**智能问诊**：LangGraph主动追问缺失信息，生成个性化建议
--**患者档案**：记住/查询/追加患者信息，身份证号+手机号Fernet加密
--**评估表生成**：Word模板自动填充，输出.docx并支持在线预览
--**审批管理**：自动创建审批项，支持通过/驳回，对话驱动
--**文件解析**：图片/PDF上传，LLM提取患者信息并归档
--**多Agent协作**：Supervisor路由+心外/药剂/全科Agent并行+Aggregator聚合
--**数据回流**：审批通过后解密写入memory_tool语义记忆向量库
+- **医学问答**：drug/guideline/literature/risk/patient多工具协同回答
+- **智能问诊**：LangGraph主动追问缺失信息，生成个性化建议
+- **患者档案**：记住/查询/追加患者信息，身份证号+手机号Fernet加密
+- **评估表生成**：Word模板自动填充，输出.docx并支持在线预览
+- **审批管理**：自动创建审批项，支持通过/驳回，对话驱动
+- **文件解析**：图片/PDF上传，LLM提取患者信息并归档
+- **多Agent协作**：Supervisor路由+心外/药剂/全科Agent并行+Aggregator聚合
+- **数据回流**：审批通过后解密写入memory_tool语义记忆向量库
 
 ### 2.3 非功能需求
 
@@ -92,11 +92,11 @@
 
 ### 2.4 三个核心痛点
 
-**痛点一：信息查不全、查得慢。**医生要打开三四个系统才能回答一个「能不能吃」的问题。业务上，这是效率杀手；技术上，这要求系统能**并行调用多源异构工具**。
+**痛点一：信息查不全、查得慢。** 医生要打开三四个系统才能回答一个「能不能吃」的问题。业务上，这是效率杀手；技术上，这要求系统能 **并行调用多源异构工具**。
 
-**痛点二：AI会「胡说八道」。**大模型可能编造一个不存在的指南名称或药物剂量——医疗场景零容忍。技术上，这意味着必须用**RAG约束回答范围+来源强制标注+反思自查**。
+**痛点二：AI会「胡说八道」。** 大模型可能编造一个不存在的指南名称或药物剂量——医疗场景零容忍。技术上，这意味着必须用 **RAG约束回答范围+来源强制标注+反思自查**。
 
-**痛点三：经验留不住。**张医生治疗过的成功病例，李医生完全不知道。好的经验随人走。技术上，这需要**审批通过后的数据回流机制**，将用药方案写入向量记忆库。
+**痛点三：经验留不住。** 张医生治疗过的成功病例，李医生完全不知道。好的经验随人走。技术上，这需要 **审批通过后的数据回流机制**，将用药方案写入向量记忆库。
 
 ---
 
@@ -110,19 +110,25 @@
 
 >**业务实现**：AI的回答不是「自己想出来的」，而是从药品说明书、临床指南、医学文献中检索出来的。每条信息后面都标着【来源：xxx】——就像论文的参考文献。如果找不到来源，就老老实实标【来源：模型推理，请核实】。
 
-**技术实现**：`tools/rag_tool.py`+`tools/retriever.py`。采用Chroma向量库+BM25混合检索。`Synthesizer`的`system_prompt`强制要求只能使用工具返回的资料，禁止编造指南名称或期刊名称。检索流程为：LLM查询改写（2-3个多角度查询）→向量检索（多查询召回去重）→BM25混合重排序（0.6×向量相似度+0.4×BM25）→反思触发LLMRerank。
+**代码设计**：
+- `tools/rag_tool.py`+`tools/retriever.py`。采用Chroma向量库+BM25混合检索。
+- `Synthesizer`的`system_prompt`强制要求只能使用工具返回的资料，禁止编造指南名称或期刊名称。
+- 检索流程为：LLM查询改写（2-3个多角度查询）→向量检索（多查询召回去重）→BM25混合重排序（0.6×向量相似度+0.4×BM25）→反思触发LLMRerank。
 
 #### ②一个大脑调度多个工具箱（Agent）
 
 >**业务实现**：系统会自动判断问题需要查哪些资料——药品？指南？文献？冲突检测？——然后**同时**去查，不用一个一个来。就像一个医生同时派几个实习生分别去查不同的资料，然后汇总。
 
-**技术实现**：`agents/planner.py`采用规则+LLM混合规划（规则快速低成本可解释，LLM兜底不确定场景）。`agents/executor.py`通过`asyncio.gather`并行执行多工具，60s超时兜底。`agents/synthesizer.py`综合各工具结果，根据`specialty`参数注入科室视角。
+**代码设计**：
+- `agents/planner.py`采用规则+LLM混合规划（规则快速低成本可解释，LLM兜底不确定场景）。
+- `agents/executor.py`通过`asyncio.gather`并行执行多工具，60s超时兜底。
+- `agents/synthesizer.py`综合各工具结果，根据`specialty`参数注入科室视角。
 
 #### ③像经验丰富的医生一样追问（LangGraph）
 
 >**业务实现**：系统不会拿到问题就直接回答。它会先分析：年龄知道吗？过敏史知道吗？在吃什么药？——如果信息不够，它会像医生一样追问，补全了再给出建议。
 
-**技术实现**：`agents/consult_graph.py`定义LangGraph状态机，节点包括：
+**代码设计**：`agents/consult_graph.py`定义LangGraph状态机，节点包括：
 ```
 analyze_gap（LLM+正则提取患者信息，分析年龄/过敏史/用药史缺口）
 →_should_ask_or_execute（缺失且未超限→ask_missing，否则→execute_tools）
@@ -136,7 +142,10 @@ analyze_gap（LLM+正则提取患者信息，分析年龄/过敏史/用药史缺
 
 >**业务实现**：同一个问题，心外科、药剂科、全科各给出自己的专业意见，最后汇总成一个综合建议——就像医院里的多学科会诊（MDT）。
 
-**技术实现**：`agents/supervisor.py`通过LLM判断问题归属，路由到`cardiology`/`pharmacy`/`general`。`agents/agent_factory.py`为每个科室创建独立Agent（含带specialty参数的Planner和Synthesizer）。`agents/aggregator.py`聚合多科室观点，标注分歧。
+**技术实现**：
+- `agents/supervisor.py`通过LLM判断问题归属，路由到`cardiology`/`pharmacy`/`general`。
+- `agents/agent_factory.py`为每个科室创建独立Agent（含带specialty参数的Planner和Synthesizer）。
+- `agents/aggregator.py`聚合多科室观点，标注分歧。
 
 ### 3.2 系统架构
 
@@ -235,88 +244,86 @@ flowchart TD
     F2 --> F3[Synthesizer 汇总合成结果]
     F3 --> G[返回结果 + trace追踪信息]
 ```
-
 #### 智能问诊（/consult）
-```mermaid
-进入LangGraph状态机
-→analyze_gap（LLM+正则提取信息，分析缺口）
-→有缺失且未超限→ask_missing（追问年龄/过敏史/用药史）
-→信息完整→execute_tools（并行调用drug/guideline/literature/risk）
-→synthesize（综合结果+历史参考病例注入）
-→reflect（5维度医学质控自查）
-→pass→输出
-→不通过→修正循环或LLMRerank，最多3轮
-```
+flowchart TD
+    A[进入 LangGraph 状态机] --> B[analyze_gap<br>LLM+正则提取信息，分析缺口]
+    B --> C{是否存在缺失信息<br>且未超限轮次？}
+    C -->|是| D[ask_missing<br>追问年龄/过敏史/用药史]
+    D --> E[用户补充信息后继续]
+    E --> B
+    C -->|否 信息完整| F[execute_tools<br>并行调用 drug/guideline/literature/risk]
+    F --> G[synthesize<br>综合结果 + 历史参考病例注入]
+    G --> H[reflect 5维度医学质控自查]
+    H --> I{自查是否通过？}
+    I -->|pass| J[输出最终结果]
+    I -->|不通过| K[修正循环 或 LLM Rerank]
+    K --> L{累计是否超过3轮？}
+    L -->|否| G
+    L -->|是| M[强制输出 + 人工复核警示]
 
 #### 评估表+审批+数据回流
-```mermaid
 flowchart TD
-    A["指令：「生成评估表张三」"] --> B["正则提取姓名 → search_patients 查询患者档案"]
-    B --> C["_generate_from_candidate<br>1.解密敏感字段<br>2.填充info_dict<br>3.drug_tool获取用药参考<br>4.LLM生成评估内容<br>5.填充Word模板"]
-    C --> D["自动创建审批项<br>type=medication_evaluation, status=pending"]
+    A["用户指令：生成评估表 张三"] --> B["正则提取姓名 → search_patients 查询患者档案"]
+    B --> C["_generate_from_candidate 执行流程：<br>① 解密敏感字段<br>② 填充 info_dict<br>③ drug_tool 获取用药参考<br>④ LLM 生成评估内容<br>⑤ 填充 Word 模板"]
+    C --> D["自动创建审批项<br>type = medication_evaluation<br>status = pending"]
     D --> E["审批人执行 approve 操作<br>校验 reviewer 身份 + 工单状态"]
     E --> F{审批结果判定}
-    F -->|审批通过| G["_write_to_memory<br>1.解密评估content<br>2.正则提取结构化字段<br>3.memory_tool.remember 存入语义记忆库"]
+    F -->|审批通过| G["_write_to_memory 数据回流：<br>① 解密评估 content<br>② 正则提取结构化字段<br>③ memory_tool.remember 存入语义记忆库"]
     F -->|驳回| H["流程终止，记录驳回信息"]
-```
 
 #### V4多Agent协作架构
-```mermaid
-graphTD
-A[用户]-->B[FastAPI/ask]
-B-->C[Supervisor路由]
-C-->|cardiology|D1[心外科Agent]
-C-->|pharmacy|D2[药剂科Agent]
-C-->|general|D3[全科Agent]
+graph TD
+    A[用户] --> B[FastAPI/ask]
+    B --> C[Supervisor路由]
+    C -->|cardiology| D1[心外科Agent]
+    C -->|pharmacy| D2[药剂科Agent]
+    C -->|general| D3[全科Agent]
 
-D1-->E1[Planner_心外科]
-D2-->E2[Planner_药剂科]
-D3-->E3[Planner_全科]
+    D1 --> E1[Planner_心外科]
+    D2 --> E2[Planner_药剂科]
+    D3 --> E3[Planner_全科]
 
-E1-->F1[Executor]
-E2-->F2[Executor]
-E3-->F3[Executor]
+    E1 --> F1[Executor]
+    E2 --> F2[Executor]
+    E3 --> F3[Executor]
 
-F1-->G[Synthesizer_心外科]
-F2-->G2[Synthesizer_药剂科]
-F3-->G3[Synthesizer_全科]
+    F1 --> G[Synthesizer_心外科]
+    F2 --> G2[Synthesizer_药剂科]
+    F3 --> G3[Synthesizer_全科]
 
-G-->H[Aggregator综合]
-G2-->H
-G3-->H
+    G --> H[Aggregator综合]
+    G2 --> H
+    G3 --> H
 
-H-->I[返回最终答案]
-```
+    H --> I[返回最终答案]
 
 #### 反思循环逻辑
-```mermaid
-flowchartTD
-A[用户提问]-->B[基础检索（向量+BM25，无LLMRerank）]
-B-->C[【第1轮】Synthesizer生成答案]
-C-->D[【第1轮】Reflect自查]
+flowchart TD
+    A[用户提问] --> B[基础检索（向量+BM25，无LLM Rerank）]
+    B --> C[【第1轮】Synthesizer生成答案]
+    C --> D[【第1轮】Reflect自查]
 
-D-->|自查通过|E[直接输出结果]
-D-->|自查不通过，记录问题原因|F{问题类型判断}
+    D -->|自查通过| E[直接输出结果]
+    D -->|自查不通过，记录问题原因| F{问题类型判断}
 
-F-->|逻辑错误/表达不清（轻量修正）|G[带反馈回Synthesizer修正]
-F-->|资料不足/相关性低（重量修正）|H[触发LLMRerank文档精排]
+    F -->|逻辑错误/表达不清（轻量修正）| G[带反馈回Synthesizer修正]
+    F -->|资料不足/相关性低（重量修正）| H[触发LLM Rerank文档精排]
 
-H-->I[使用精排后文档重新生成答案]
-G-->I
-I-->J[【第2轮】Synthesizer生成修正答案]
-J-->K[【第2轮】Reflect自查]
+    H --> I[使用精排后文档重新生成答案]
+    G --> I
+    I --> J[【第2轮】Synthesizer生成修正答案]
+    J --> K[【第2轮】Reflect自查]
 
-K-->|自查通过|E
-K-->|自查仍不通过|L[最多再修正一轮，累计上限3轮]
-L-->M[强制输出结果+人工复核警示]
-```
+    K -->|自查通过| E
+    K -->|自查仍不通过| L[最多再修正一轮，累计上限3轮]
+    L --> M[强制输出结果 + 人工复核警示]
 
 ### 3.5 知识库搭建
 
--**外部知识**：药品说明书、临床指南、医学文献PDF→`ingest.py`解析→DashScopeEmbedding向量化→Chroma向量库
--**内部经验**：审批通过的用药方案→`_write_to_memory`→写入memory_tool语义记忆向量库
--**检索策略**：LLM查询改写→向量检索去重→BM25混合重排序→LLMRerank兜底
--**知识更新**：新PDF放入data/目录→重新运行`ingest.py`
+- **外部知识**：药品说明书、临床指南、医学文献PDF→`ingest.py`解析→DashScopeEmbedding向量化→Chroma向量库
+- **内部经验**：审批通过的用药方案→`_write_to_memory`→写入memory_tool语义记忆向量库
+- **检索策略**：LLM查询改写→向量检索去重→BM25混合重排序→LLMRerank兜底
+- **知识更新**：新PDF放入data/目录→重新运行`ingest.py`
 
 ### 3.6 安全设计
 
@@ -329,27 +336,29 @@ L-->M[强制输出结果+人工复核警示]
 
 ---
 
-## 第四篇：质量保障
+## 第四篇：输出质量保障
 
 ### 4.1 怎么保证不出错
 
->**业务场景**：医疗场景最怕AI「一本正经地胡说八道」。本项目用了三重保障：第一，所有回答必须有据可查，找不到来源就老实标注；第二，系统在给出答案前会自动自查五遍；第三，用药方案必须人工审批才能生效。
+>医疗场景最怕AI「一本正经地胡说八道」。本项目用了三重保障：第一，所有回答必须有据可查，找不到来源就老实标注；第二，系统在给出答案前会自动自查五遍；第三，用药方案必须人工审批才能生效。
 
 #### 三重保障机制
 
-**第一重：RAG约束+来源标注。**`Synthesizer`的`system_prompt`强制要求只能使用工具返回的资料，每条信息末尾标注【来源：xxx】，无法对应时标注【来源：模型推理，请核实】。
+**第一重：RAG约束+来源标注。**
+- `Synthesizer`的`system_prompt`强制要求只能使用工具返回的资料，每条信息末尾标注【来源：xxx】，无法对应时标注【来源：模型推理，请核实】。
 
-**第二重：反思机制。**`consult_graph.py`的`reflect`节点从5个维度审核答案：
-
-1.资料充分性：检索到的资料是否足够支撑回答？
-2.绝对禁忌：是否推荐了患者明确禁用的药物？
-3.准确性：剂量、用法、诊断逻辑是否准确？
-4.完整性：是否遗漏了重要的警示信息？
-5.幻觉风险：是否编造了不存在的来源或事实？
+**第二重：反思机制。**
+`consult_graph.py`的`reflect`节点从5个维度审核答案：
+- 1.资料充分性：检索到的资料是否足够支撑回答？
+- 2.绝对禁忌：是否推荐了患者明确禁用的药物？
+- 3.准确性：剂量、用法、诊断逻辑是否准确？
+- 4.完整性：是否遗漏了重要的警示信息？
+- 5.幻觉风险：是否编造了不存在的来源或事实？
 
 不通过则进入修正循环或触发LLMRerank，`max_iterations=3`。
 
-**第三重：人工审批。**评估表生成后自动创建审批项，必须经审批人通过才能生效。反思不通过时强制标记「请人工复核」。
+**第三重：人工审批。**
+评估表生成后自动创建审批项，必须经审批人通过才能生效。反思不通过时强制标记「请人工复核」。
 
 ### 4.2 测试覆盖
 
@@ -364,7 +373,7 @@ L-->M[强制输出结果+人工复核警示]
 
 运行方式：`PYTHONPATH=.pytesttests/-v`，覆盖率：`pytesttests/--cov=agents--cov=tools--cov-report=html`
 
-### 4.3 用之前vs用之后
+### 4.3 使用前后对比
 
 |业务环节|用之前|用之后|
 |------|------|------|
@@ -379,7 +388,7 @@ L-->M[强制输出结果+人工复核警示]
 
 ## 第五篇：交付与运维
 
-### 5.1 迭代过程
+### 5.1 版本迭代
 
 |版本|交付内容|验收标准|
 |------|----------|----------|
@@ -402,10 +411,10 @@ docker-composeup-d
 
 ### 5.3 运维要点
 
--**监控**：Prometheus`/metrics`采集请求数/延迟/错误数，按租户拆分，可接Grafana
--**日志**：`RotatingFileHandler`（10MB/文件，5备份），含tenant_id，`LOG_LEVEL`可调
--**备份**：MySQLDockerVolume定期快照；Chroma直接复制`vector_db`目录
--**故障处理**：常见问题见表
+- **监控**：Prometheus`/metrics`采集请求数/延迟/错误数，按租户拆分，可接Grafana
+- **日志**：`RotatingFileHandler`（10MB/文件，5备份），含tenant_id，`LOG_LEVEL`可调
+- **备份**：MySQLDockerVolume定期快照；Chroma直接复制`vector_db`目录
+- **故障处理**：常见问题见表
 
 |故障|原因|处理|
 |------|------|------|
@@ -415,12 +424,12 @@ docker-composeup-d
 |审批列表空|非审批人|确认current_session_user==reviewer|
 ---
 
-### 5.4 后期维护
+### 5.4 后期维护（部分能力暂未实现）
 
--**知识更新**：新PDF→`data/`目录→重新`ingest.py`
--**模型迭代**：收集线上案例→构建评测集→优化prompt/检索权重
--**反馈收集（未实现）**：前端👍/👎+trace_id关联，分析高频错误
--**数据清理**：定期清理过期会话/无效审批，清理前备份，低峰期执行
+- **知识更新**：新PDF→`data/`目录→重新`ingest.py`
+- **模型迭代**：收集线上案例→构建评测集→优化prompt/检索权重
+- **反馈收集（未实现）**：前端👍/👎+trace_id关联，分析高频错误
+- **数据清理**：定期清理过期会话/无效审批，清理前备份，低峰期执行
 
 
 ## 第六篇：价值评估
@@ -436,9 +445,9 @@ docker-composeup-d
 
 ### 6.2 投入产出
 
--**投入**：1名FDE约2-3个月（V1-V4），DashScopeAPI按请求量计费，服务器资源
--**产出**：20名医生×30min/天=年省约2,500工时，按医生时薪折算，**6-12个月收回投入**
--**长期价值**：少一次用药错误、少一个漏诊、多一个可复用的经验——这些价值无法用短期ROI衡量
+- **投入**：1名FDE约2-3个月（V1-V4），DashScopeAPI按请求量计费，服务器资源
+- **产出**：20名医生×30min/天=年省约2,500工时，按医生时薪折算，**6-12个月收回投入**
+- **长期价值**：少一次用药错误、少一个漏诊、多一个可复用的经验——这些价值无法用短期ROI衡量
 
 ---
 
