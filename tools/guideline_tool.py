@@ -41,8 +41,8 @@ class GuidelineTool(BaseTool):
             )
 
         self.trace("retrieve", {"count": len(docs), "samples": [d.page_content[:200] for d in docs]})
-        context = "\n\n".join([d.page_content for d in docs])
-        self.trace("context", {"length": len(context), "preview": context[:300]})
+        context, citations = self._build_cited_context(docs)
+        self.trace("context", {"length": len(context), "preview": context[:300], "citations": citations})
 
         messages = [{
             "role": "user",
@@ -57,9 +57,13 @@ class GuidelineTool(BaseTool):
 
 问题：
 {query}
+
+重要要求：
+1. 每条回答内容末尾必须标注精确来源，格式为：(来源: xxx.pdf, 第 N 页，第 M 段)
+2. 来源信息必须直接从资料中复制，不得自行编造
+3. 如果某条信息无法对应到资料中的来源，标注：(来源: 模型推理，请核实)
 """
         }]
-        #answer = self._safe_llm_call(messages)
         answer = self._safe_llm_call(messages, fallback_context=context)
         latency = round(time.time() - t0, 3)
         self.trace("final_answer", {"answer": answer, "latency": latency})
@@ -67,6 +71,6 @@ class GuidelineTool(BaseTool):
         return build_response(
             answer=answer,
             source="guideline",
-            debug={"retrieved": len(docs), "latency": latency},
+            debug={"retrieved": len(docs), "latency": latency, "citations": citations},
             trace=self.get_trace()
-        ) 
+        )

@@ -20,7 +20,6 @@ class Synthesizer:
                 "tool_sources": [r.get("source") for r in tool_results if r]
             })
 
-        # 优先检查 report 工具返回的信息（生成评估表）
         for res in tool_results:
             if not res or not isinstance(res, dict):
                 continue
@@ -34,8 +33,7 @@ class Synthesizer:
                             "source": "report"
                         })
                     return answer
-                
-        # 优先检查 patient 工具返回的确认信息
+
         for res in tool_results:
             if not res or not isinstance(res, dict):
                 continue
@@ -50,7 +48,6 @@ class Synthesizer:
                         })
                     return answer
 
-        # 只有一个工具结果且是 patient 的直接返回
         if len(tool_results) == 1:
             res = tool_results[0]
             if res and isinstance(res, dict) and res.get("source") == "patient":
@@ -63,13 +60,15 @@ class Synthesizer:
                     })
                 return answer
 
-        # 综合所有工具结果
         context_parts = []
+        invalid_keywords = ["未提供", "无法回答", "未提及", "资料中未", "无法评估", "没有相关"]
         for res in tool_results:
             if not res or not isinstance(res, dict):
                 continue
             answer = res.get("answer", "")
             if not answer:
+                continue
+            if any(kw in answer for kw in invalid_keywords) and len(answer) < 100:
                 continue
             source = res.get("source", "unknown").upper()
             context_parts.append(f"【来自 {source} 工具】\n{answer}")
@@ -85,7 +84,6 @@ class Synthesizer:
 
         combined = "\n\n".join(context_parts)
 
-        # ===== 提取历史参考部分 =====
         import re
         history_ref_section = ""
         cleaned_question = augmented_question
@@ -111,7 +109,6 @@ class Synthesizer:
             "detailed": "回答可详尽展开，不限制长度，确保信息完整。"
         }.get(mode, "")
 
-        # system_prompt 中强制规则
         history_rule = ""
         if history_ref_section:
             history_rule = "你必须以【历史参考病例】开头回答，并明确提及病例中的患者姓名和用药方案。这是强制要求，不得省略。"
@@ -124,18 +121,23 @@ class Synthesizer:
         3. 使用 "- " 开头的列表项列出关键信息，每项占一行。
         4. 重要警示前加 "⚠️ " 并单独成行。
         5. 不同主题之间用空行分隔。
-        6. 最后一行：总结建议。
-        注意：不要使用任何加粗符号，不要使用星号。每一条信息末尾标注【来源：xxx】。
-        
+        6. 如果有多个工具返回了有效信息，最后一行：总结建议。
+        注意：不要使用任何加粗符号，不要使用星号。
+
         【来源标注的硬性规则】
-        1. 每条信息的【来源：xxx】必须直接从【各工具返回结果】中的已有来源复制，不得自行编造或修改。
-        2. 如果某条信息无法对应到任何工具返回结果中的已有来源，必须标注：【来源：模型推理，请核实】。
-        3. 严禁使用任何指南名称、共识名称、期刊名称或权威机构名称作为来源，除非该名称完整出现在工具返回结果中。
-        4. 禁止使用诸如"中国《成人急性感染性腹泻诊疗专家共识》"、"WHO指南"、"NEJM"等你在训练数据中见过的名称——这些都属于编造。
-        5. 【来源：DRUG工具】、【来源：GUIDELINE工具】等是允许的，因为它们来自工具返回结果中的source字段。
+        1. 你只能输出工具返回结果中明确出现的信息，禁止任何推理、解释、延伸或补充。
+        2. 禁止解释成分的功效作用（如"山楂消食化积"等），除非工具返回结果原文中明确写了这些内容。
+        3. 禁止输出药物联用建议、饮食禁忌、注意事项等，除非工具返回结果原文中明确写了这些内容。
+        4. 如果工具返回结果中已包含精确来源标注 (来源: xxx.pdf, 第 N 页，第 M 段)，你必须在对应信息末尾原样复制该标注。
+        5. 如果工具返回结果中未包含精确来源标注，则使用工具来源格式：【来源：DRUG工具】、【来源：GUIDELINE工具】、【来源：LITERATURE工具】等。
+        6. 严禁使用任何指南名称、共识名称、期刊名称或权威机构名称作为来源。
+        7. 绝对禁止将精确来源格式替换为粗粒度格式。
+        8. 只有一个工具返回了有效信息时，禁止输出"总结建议"。
+        9. 如果有多个工具返回有效信息，"总结建议"必须简洁概括工具结果，禁止加入工具结果外的任何知识。
+        10. 如果有工具没有返回有效信息，则忽略该工具返回，不能展示成"现有资料中未提供相关信息"。
+        11. 禁止出现任何不相干的警示信息。
         """
 
-        # ===== 构建 user_prompt =====
         if history_ref_section:
             user_prompt = f"""{length_instruction}
 
@@ -175,9 +177,7 @@ class Synthesizer:
             logger.debug(f"[Synthesizer] LLM 调用失败: {e}")
             answer = f"【系统降级】LLM 合成失败，以下是各工具原始结果：\n\n{combined[:1000]}"
 
-        # 🆕 强制后处理：如果历史参考存在但回答中没有提及，自动追加
         if history_ref_section and "历史参考" not in answer and "赵六" not in answer:
-            # 提取历史病例中的关键信息
             name_match = re.search(r'([\u4e00-\u9fa5]{2,4})[：:]\s*([^，,]+)', history_ref_section)
             if name_match:
                 patient_name = name_match.group(1)
@@ -193,7 +193,6 @@ class Synthesizer:
         specialty_display = {"cardiology": "心外科", "pharmacy": "药剂科", "general": "全科"}.get(self.specialty, "全科")
         answer = f"【{specialty_display}观点】\n{answer}"
 
-            # ===== 🆕 强制追加历史参考（如果缺失） =====
         if "【历史参考病例】" in augmented_question:
             import re
             match = re.search(r'【历史参考病例】\s*[-]?\s*([\u4e00-\u9fa5]{2,4})[：:]\s*([^，,\n]+)', augmented_question)

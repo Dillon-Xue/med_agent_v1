@@ -4,7 +4,7 @@ import dashscope
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
-from utils.embeddings import DashscopeEmbeddings   # 从公共模块导入
+from utils.embeddings import DashscopeEmbeddings
 
 load_dotenv()
 PROJECT_ROOT = os.getenv("MED_AGENT_ROOT", os.getcwd())
@@ -26,8 +26,25 @@ def load_pdfs(path):
     for file in os.listdir(path):
         if file.endswith(".pdf"):
             loader = PyPDFLoader(os.path.join(path, file))
-            docs.extend(loader.load())
+            pages = loader.load()
+            for page in pages:
+                page.metadata["source"] = file
+                page.metadata["page"] = page.metadata.get("page", 0) + 1
+            docs.extend(pages)
     return docs
+
+def add_chunk_index(chunks):
+    page_chunks = {}
+    for chunk in chunks:
+        page_key = (chunk.metadata.get("source"), chunk.metadata.get("page", 1))
+        if page_key not in page_chunks:
+            page_chunks[page_key] = []
+        page_chunks[page_key].append(chunk)
+    
+    for page_key, chunk_list in page_chunks.items():
+        for idx, chunk in enumerate(chunk_list, 1):
+            chunk.metadata["chunk_index"] = idx
+    return chunks
 
 def build_index(category):
     print(f"\n===== BUILD {category} =====")
@@ -39,7 +56,10 @@ def build_index(category):
         print(f"跳过 {category}: 无 PDF 文件")
         return
     chunks = splitter.split_documents(docs)
+    chunks = add_chunk_index(chunks)
     print("chunks:", len(chunks))
+    for i, chunk in enumerate(chunks[:3], 1):
+        print(f"  Chunk {i}: source={chunk.metadata.get('source')}, page={chunk.metadata.get('page')}, chunk_index={chunk.metadata.get('chunk_index')}")
     db = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
@@ -51,4 +71,4 @@ def build_index(category):
 if __name__ == "__main__":
     for c in CATEGORIES:
         build_index(c)
-    print("\nALL DONE") 
+    print("\nALL DONE")

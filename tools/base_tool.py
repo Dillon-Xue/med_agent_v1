@@ -39,7 +39,7 @@ class BaseTool(ABC):
     )
     def _llm_call_with_retry(self, messages, temperature=0.2, model=None):
         if model is None:
-            model = self.model   # 使用实例保存的模型
+            model = self.model
         resp = self.client.chat.completions.create(
             model=model,
             messages=messages,
@@ -58,17 +58,33 @@ class BaseTool(ABC):
             else:
                 return f"LLM 调用失败: {str(e)}"
 
+    def _build_cited_context(self, docs):
+        context_parts = []
+        citations = []
+        for i, doc in enumerate(docs, 1):
+            source = doc.metadata.get("source", "未知来源")
+            page = doc.metadata.get("page", 1)
+            chunk_index = doc.metadata.get("chunk_index", 1)
+            content = doc.page_content.strip()
+            if content:
+                cite_info = f"(来源: {source}, 第 {page} 页，第 {chunk_index} 段)"
+                context_parts.append(f"{content} {cite_info}")
+                citations.append({
+                    "index": i,
+                    "source": source,
+                    "page": page,
+                    "chunk_index": chunk_index
+                })
+        return "\n\n".join(context_parts), citations
+
     @abstractmethod
     def run(self, query: str):
-        pass 
-    
+        pass
+
     def retrieve_with_optimization(self, query: str, k: int = 5, use_llm_rerank: bool = False) -> List:
-        """使用优化后的检索（混合检索 + 可选LLM重排序）"""
-        # 1. 混合检索
         results = self.retriever.retrieve(query, k=k*2)
         docs = [doc for doc, score in results]
 
-        # 2. 可选 LLM 重排序
         if use_llm_rerank and len(docs) > k:
             docs = self.retriever.rerank_with_llm(query, docs, top_k=k)
         else:
