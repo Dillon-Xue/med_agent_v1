@@ -194,7 +194,7 @@ class ConsultGraph:
 
         # ===== 如果表格提取失败，回退到原有正则逻辑 =====
         if not info["姓名"]:
-            name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', text)
+            name_match = re.search(r'(?:我是|我叫|我是患者|患者|记住患者)\s*([\u4e00-\u9fa5]{2,4})', text)
             if name_match:
                 info["姓名"] = name_match.group(1)
 
@@ -281,7 +281,7 @@ class ConsultGraph:
                 all_user_text += " " + msg.get("content", "")
             if msg.get("role") == "system" and "【文件内容】" in msg.get("content", ""):
                 all_user_text += " " + msg.get("content", "")
-        name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
+        name_match = re.search(r'(?:我是|我叫|我是患者|患者|记住患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
         if name_match:
             current_patient = name_match.group(1)
 
@@ -626,7 +626,7 @@ class ConsultGraph:
 
         # 3. 匹配 "我是XXX" / "我叫XXX" / "患者XXX" 格式
         if not name:
-            name_match = re.search(r'(?:我是|我叫|我是患者|患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
+            name_match = re.search(r'(?:我是|我叫|我是患者|患者|记住患者)\s*([\u4e00-\u9fa5]{2,4})', all_user_text)
             if name_match:
                 candidate = name_match.group(1)
                 if candidate not in invalid_names:
@@ -916,9 +916,20 @@ class ConsultGraph:
 
         logger.info(f"  将重跑工具: {used_tools}")
 
-        # ... 中间执行代码不变（调 Executor）...
+        # 执行工具获取新结果
+        try:
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, self.executor.run(used_tools, question))
+                results = future.result()
+        except RuntimeError:
+            results = asyncio.run(self.executor.run(used_tools, question))
+        except Exception as e:
+            logger.error("[ConsultGraph] Rerank 执行工具出错:", e)
+            results = []
 
-        # 假设执行后得到新 results（代码略，同上文实现）
+        if not isinstance(results, list):
+            results = []
 
         logger.info(f"Rerank 完成，新工具结果数: {len(results)}")
         if len(results) > old_results_count:

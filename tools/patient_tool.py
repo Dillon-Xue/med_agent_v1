@@ -165,10 +165,33 @@ class PatientTool:
                         "doctor_id": row.get("doctor_id", "") or ""
                     }
         else:
-            # 没有 id_card，仅用 name 查询
+            # 没有 id_card，先用 name + tenant_id + doctor_id 查询
             cursor.execute(
                 "SELECT id, name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, doctor_id FROM patients WHERE name = %s AND tenant_id = %s AND doctor_id = %s",
                 (name, tenant_id, doctor_id)
+            )
+            row = cursor.fetchone()
+            if row:
+                conn.close()
+                return {
+                    "id": row.get("id"),
+                    "name": row.get("name", ""),
+                    "gender": row.get("gender", "") or "",
+                    "age": row.get("age", "") or "",
+                    "id_card": decrypt_if_needed(row.get("id_card", "") or ""),
+                    "phone": decrypt_if_needed(row.get("phone", "") or ""),
+                    "address": row.get("address", "") or "",
+                    "allergy": row.get("allergy", "") or "",
+                    "medication": row.get("medication", "") or "",
+                    "symptoms": row.get("symptoms", "") or "",
+                    "diagnosis": row.get("diagnosis", "") or "",
+                    "info": row.get("info", "") or "",
+                    "doctor_id": row.get("doctor_id", "") or ""
+                }
+            # 如果按 doctor_id 查不到，再按全局 name + tenant_id 查询（避免跨 doctor 唯一键冲突）
+            cursor.execute(
+                "SELECT id, name, gender, age, id_card, phone, address, allergy, medication, symptoms, diagnosis, info, doctor_id FROM patients WHERE name = %s AND tenant_id = %s",
+                (name, tenant_id)
             )
             row = cursor.fetchone()
             conn.close()

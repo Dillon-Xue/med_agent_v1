@@ -790,7 +790,8 @@ async def consult(req: ChatRequest, request: Request):
         if name_match:
             name = name_match.group(1)
             info = name_match.group(2).strip()
-            result = patient_tool.remember(name, info, append=False)
+            append = bool(re.search(r'追加患者|补充患者', question, re.IGNORECASE))
+            result = patient_tool.remember(name, info, append=append)
             return {
                 "success": True,
                 "result": {
