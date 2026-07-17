@@ -10,10 +10,11 @@ class Planner:
     def __init__(self, use_llm: bool = True, trace_callback=None, specialty: str = "general"):
         self.specialty = specialty
         self.rules = {
-            "drug": ["成分", "说明书", "副作用", "禁忌", "用法", "剂量"],
+            "drug": ["成分", "说明书", "副作用", "禁忌", "用法", "剂量", "不良反应", "功能"],
             "guideline": ["指南", "治疗", "推荐", "临床", "诊疗"],
             "literature": ["论文", "研究", "文献", "机制", "试验"],
-            "risk": ["相互作用", "不良反应", "禁忌", "风险", "安全", "冲突", "合用", "联合用药", "危险"],
+            "risk": ["相互作用", "风险", "冲突", "合用", "联合用药", "配伍", "同服", "一起用", "联用"],
+            "rag": ["特殊人群", "研发方案", "立项", "处方筛选", "药学研究"],
             "patient": ["患者", "记住", "记录", "档案", "病历", "姓名", "信息", "追加", "补充", "病号", "增加"],
             "report": ["评估表", "生成报告", "生成评估表", "评估报告", "生成病历", "生成档案", "生成记录"]
         }
@@ -71,7 +72,6 @@ class Planner:
                 tools.add("literature")
         elif self.specialty == "pharmacy":
             tools.add("drug")
-            tools.add("risk")
             if any(kw in question for kw in ["剂量", "用法", "儿童", "老年人"]):
                 tools.add("guideline")
 

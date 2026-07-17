@@ -238,6 +238,11 @@ async def process_question(question: str, history: list, trace_callback=None) ->
         if not history:
             return False
         import re
+        # 代词保护：当前问题含代词时，不判定为话题切换（需要历史上下文做指代消解）
+        pronouns = ["它", "他", "她", "这个", "那个", "该药", "其", "此药", "上面", "前面", "刚才"]
+        if any(p in current_q for p in pronouns):
+            logger.info("[话题切换] 检测到代词，保留历史用于指代消解")
+            return False
         current_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,6}', current_q))
         user_messages = [msg["content"] for msg in history[-6:] if msg.get("role") == "user"]
         if not user_messages:
@@ -253,6 +258,24 @@ async def process_question(question: str, history: list, trace_callback=None) ->
         if is_shift:
             logger.info(f"[话题切换] 重叠度 {overlap_rate:.2%}，截断历史")
         return is_shift
+
+    def _resolve_pronoun(question: str, history: list) -> str:
+        """简单指代消解：当代词出现时，从历史中提取药品名注入当前问题"""
+        import re
+        pronouns = ["它", "他", "她", "这个", "那个", "该药", "其", "此药"]
+        if not any(p in question for p in pronouns):
+            return question
+        if not history:
+            return question
+        user_messages = [msg["content"] for msg in history[-6:] if msg.get("role") == "user"]
+        drug_pattern = r'([\u4e00-\u9fa5]{2,8}(?:颗粒|胶囊|片|丸|散|膏|口服液|注射液|注射剂|糖浆|合剂|栓剂|滴剂|喷剂|气雾剂|贴剂|贴膏|软膏|乳膏|凝胶|溶液|搽剂|洗剂|含片|舌下片|缓释片|肠溶片|分散片|泡腾片))'
+        for msg in reversed(user_messages):
+            matches = re.findall(drug_pattern, msg)
+            if matches:
+                drug_name = matches[-1]
+                logger.info(f"[指代消解] 注入药品名: {drug_name}")
+                return f"{drug_name} {question}"
+        return question
 
     stripped = question.strip()
     greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "你好呀"]
@@ -273,7 +296,7 @@ async def process_question(question: str, history: list, trace_callback=None) ->
         if _is_topic_shift(question, history):
             history = []
             logger.info("[话题切换] 检测到切换，清空历史")
-        recent = history[-5:]
+        recent = history[-4:]
         filtered = []
         for msg in recent:
             if msg["role"] == "user" and msg["content"] in ["你好", "您好", "hi", "hello"]:
@@ -281,7 +304,9 @@ async def process_question(question: str, history: list, trace_callback=None) ->
             filtered.append(msg)
         if filtered:
             history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in filtered])
-            augmented_question = f"对话历史：\n{history_str}\n当前问题：{question}"
+            # 指代消解：当代词出现时，从历史中提取药品名注入当前问题
+            resolved_question = _resolve_pronoun(question, history)
+            augmented_question = f"对话历史：\n{history_str}\n当前问题：{resolved_question}"
         else:
             augmented_question = question
     else:

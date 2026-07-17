@@ -341,6 +341,21 @@ class ConsultGraph:
         state["final_answer"] = ask_text
         return state
 
+    def _extract_current_question(self, enhanced: str) -> str:
+        """从 enhanced 中提取当前问题，剥离对话历史前缀，避免污染工具的 RAG 检索"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[DEBUG] _extract_current_question 输入: {enhanced[:80]}...")
+        if "当前问题：" in enhanced:
+            # 取最后一个"当前问题："之后的内容（防止历史中也有此标记）
+            current_q = enhanced.rsplit("当前问题：", 1)[-1].strip()
+            logger.info(f"[DEBUG] _extract_current_question 输出: {current_q}")
+            return current_q
+        # 没有"当前问题："标记，剥离可能的"患者信息：...。问题："前缀
+        if enhanced.startswith("患者信息：") and "。问题：" in enhanced:
+            return enhanced.split("。问题：", 1)[-1].strip()
+        return enhanced
+
     def _execute_tools(self, state: AgentState) -> AgentState:
         original_question = state["question"]
         patient_info = state.get("patient_info", {})
@@ -414,7 +429,13 @@ class ConsultGraph:
                 tool_question = original_question
                 logger.debug(f"[ConsultGraph] 未提取到姓名，使用原始问题: {tool_question}")
         else:
-            tool_question = enhanced
+            # 工具只接收当前问题，不接收对话历史（避免污染 RAG 检索和工具内部 LLM）
+            if "当前问题：" in enhanced:
+                tool_question = enhanced.rsplit("当前问题：", 1)[-1].strip()
+            elif enhanced.startswith("患者信息：") and "。问题：" in enhanced:
+                tool_question = enhanced.split("。问题：", 1)[-1].strip()
+            else:
+                tool_question = enhanced
 
         try:
             loop = asyncio.get_running_loop()

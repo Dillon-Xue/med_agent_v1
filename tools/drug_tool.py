@@ -27,12 +27,15 @@ class DrugTool(BaseTool):
         self._trace = []
 
     def run(self, query: str):
+        # 最后一道防线：如果收到完整对话历史，提取当前问题
+        if "当前问题：" in query:
+            query = query.rsplit("当前问题：", 1)[-1].strip()
         self.clear_trace()
         t0 = time.time()
         self.trace("run_start", {"query": query})
 
         try:
-            docs = self.retrieve_with_optimization(query, k=5, use_llm_rerank=False)
+            docs = self.retrieve_with_optimization(query, k=10, use_llm_rerank=False)
         except Exception as e:
             self.trace("error", {"stage": "retrieve", "error": str(e)})
             return build_response(

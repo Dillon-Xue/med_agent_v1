@@ -3,6 +3,7 @@ import os
 from utils.config import get_llm_client
 from utils.config import get_response_mode, get_response_max_length
 import logging
+import re
 logger = logging.getLogger(__name__)
 
 class Synthesizer:
@@ -70,6 +71,9 @@ class Synthesizer:
                 continue
             if any(kw in answer for kw in invalid_keywords) and len(answer) < 100:
                 continue
+            # 只保留带精确来源标注的工具结果
+            if not re.search(r"[(（]来源:.*?\.pdf.*?页", answer):
+                continue
             source = res.get("source", "unknown").upper()
             context_parts.append(f"【来自 {source} 工具】\n{answer}")
 
@@ -84,7 +88,6 @@ class Synthesizer:
 
         combined = "\n\n".join(context_parts)
 
-        import re
         history_ref_section = ""
         cleaned_question = augmented_question
         if "【历史参考病例】" in augmented_question:
@@ -110,18 +113,17 @@ class Synthesizer:
         }.get(mode, "")
 
         history_rule = ""
-        if history_ref_section:
-            history_rule = "你必须以【历史参考病例】开头回答，并明确提及病例中的患者姓名和用药方案。这是强制要求，不得省略。"
+        # 历史参考病例不再强制输出
 
         system_prompt = f"""{base_prompt} {history_rule}
         回答必须严格遵循以下纯文本格式，不要使用任何markdown语法。
         输出格式要求：
-        1. 第一行：核心结论（一句话）。
+        1. 第一行：核心结论（一句话，尽可能简洁）。
         2. 空一行。
-        3. 使用 "- " 开头的列表项列出关键信息，每项占一行。
-        4. 重要警示前加 "⚠️ " 并单独成行。
+        3. 关键信息用 "- " 开头的列表项列出，但同一来源的同类信息必须合并为一句话，禁止逐条拆分后重复标注来源。
+        4. 仅当工具结果原文明确包含"警示"、"警告"、"注意"等字样时，才在对应内容前加 "⚠️ " 并单独成行。普通禁忌、副作用、用法用量等信息不需要加 ⚠️。
         5. 不同主题之间用空行分隔。
-        6. 如果有多个工具返回了有效信息，最后一行：总结建议。
+        6. 仅当有多个工具返回了有效信息时，最后一行才输出"总结建议"。
         注意：不要使用任何加粗符号，不要使用星号。
 
         【来源标注的硬性规则】
@@ -129,31 +131,23 @@ class Synthesizer:
         2. 禁止解释成分的功效作用（如"山楂消食化积"等），除非工具返回结果原文中明确写了这些内容。
         3. 禁止输出药物联用建议、饮食禁忌、注意事项等，除非工具返回结果原文中明确写了这些内容。
         4. 如果工具返回结果中已包含精确来源标注 (来源: xxx.pdf, 第 N 页，第 M 段)，你必须在对应信息末尾原样复制该标注。
-        5. 如果工具返回结果中未包含精确来源标注，则使用工具来源格式：【来源：DRUG工具】、【来源：GUIDELINE工具】、【来源：LITERATURE工具】等。
-        6. 严禁使用任何指南名称、共识名称、期刊名称或权威机构名称作为来源。
-        7. 绝对禁止将精确来源格式替换为粗粒度格式。
-        8. 只有一个工具返回了有效信息时，禁止输出"总结建议"。
-        9. 如果有多个工具返回有效信息，"总结建议"必须简洁概括工具结果，禁止加入工具结果外的任何知识。
-        10. 如果有工具没有返回有效信息，则忽略该工具返回，不能展示成"现有资料中未提供相关信息"。
-        11. 禁止出现任何不相干的警示信息。
+        5. 同一文档同一页的多条信息必须合并为一句表述，仅在该句末尾标注一次来源。禁止把每条信息单独成行并重复标注来源。
+        6. 如果工具返回结果中未包含精确来源标注，则使用工具来源格式：【来源：DRUG工具】、【来源：GUIDELINE工具】、【来源：LITERATURE工具】等。
+        7. 严禁使用任何指南名称、共识名称、期刊名称或权威机构名称作为来源。
+        8. 绝对禁止将精确来源格式替换为粗粒度格式。
+        9. 只有一个工具返回了有效信息时，禁止输出"总结建议"。
+        10. 如果有多个工具返回有效信息，"总结建议"必须简洁概括工具结果，禁止加入工具结果外的任何知识。
+        11. 如果有工具没有返回有效信息，则忽略该工具返回，不能展示成"现有资料中未提供相关信息"。
+        12. 禁止出现任何不相干的警示信息。
+        13. 绝对禁止输出"资料中未提供xxx的其他信息"等无效提示。
+        14. 绝对禁止将精确来源格式替换为粗粒度格式。
+        15. 绝对禁止在回答中输出"【来源：XX工具】"标签。
+        16. 只有一个工具返回有效信息时，绝对禁止输出"总结建议"。
+        17. 绝对禁止输出模型推理内容，如"来源: 模型推理，请核实"。
+        18. 绝对禁止对同一内容重复输出多行"⚠️"警示。
         """
 
-        if history_ref_section:
-            user_prompt = f"""{length_instruction}
-
-    {history_ref_section}
-
-    当前问题：
-    {cleaned_question}
-
-    各工具返回结果：
-    {combined}
-
-    请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。
-
-    ⚠️ 注意：你的回答必须以「【历史参考病例】」开头，并明确提到患者姓名和用药方案。这是强制要求，不得违反。"""
-        else:
-            user_prompt = f"""{length_instruction}
+        user_prompt = f"""{length_instruction}
 
     对话历史及当前问题：
     {cleaned_question}
@@ -161,7 +155,8 @@ class Synthesizer:
     各工具返回结果：
     {combined}
 
-    请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。"""
+    请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。
+    要求：同类信息必须合并为一句简洁表述，只在末尾标注一次来源。禁止逐条拆分重复标注。"""
 
         try:
             resp = self.client.chat.completions.create(
@@ -177,12 +172,7 @@ class Synthesizer:
             logger.debug(f"[Synthesizer] LLM 调用失败: {e}")
             answer = f"【系统降级】LLM 合成失败，以下是各工具原始结果：\n\n{combined[:1000]}"
 
-        if history_ref_section and "历史参考" not in answer and "赵六" not in answer:
-            name_match = re.search(r'([\u4e00-\u9fa5]{2,4})[：:]\s*([^，,]+)', history_ref_section)
-            if name_match:
-                patient_name = name_match.group(1)
-                diagnosis = name_match.group(2)
-                answer = f"【历史参考病例】参考患者 {patient_name}（{diagnosis}）的用药经验，该病例相似度15%。\n\n{answer}"
+        # 历史参考病例不再强制添加
 
         if trace_callback:
             trace_callback("synthesizer", {
@@ -193,14 +183,35 @@ class Synthesizer:
         specialty_display = {"cardiology": "心外科", "pharmacy": "药剂科", "general": "全科"}.get(self.specialty, "全科")
         answer = f"【{specialty_display}观点】\n{answer}"
 
-        if "【历史参考病例】" in augmented_question:
-            import re
-            match = re.search(r'【历史参考病例】\s*[-]?\s*([\u4e00-\u9fa5]{2,4})[：:]\s*([^，,\n]+)', augmented_question)
-            if match:
-                name = match.group(1)
-                diagnosis = match.group(2)
-                history_line = f"\n\n【历史参考】相似病例：{name}（{diagnosis}）"
-                if history_line not in answer:
-                    answer = answer + history_line
+        # 不在最终回答中附加历史参考病例
+
+
+        # 后处理过滤
+        skip_phrases = [
+            "资料中未提供", "未提供相关", "未找到相关", "现有资料不足",
+            "无法提供", "没有相关信息", "未提及相关", "无法回答",
+            "模型推理", "请核实", "来源: 模型推理"
+        ]
+        lines_ans = answer.split('\n')
+        filtered = []
+        for line_a in lines_ans:
+            s = line_a.strip()
+            if not s:
+                filtered.append(line_a)
+                continue
+            if s.startswith('【来源：') and s.endswith('工具】'):
+                continue
+            if '来源: 模型推理' in s or '来源：模型推理' in s:
+                continue
+            if s.startswith('【历史参考病例】') or s.startswith('【历史参考】'):
+                continue
+            if any(p in s for p in skip_phrases) and '⚠️' in s:
+                continue
+            if any(p in s for p in skip_phrases) and len(s) < 50:
+                continue
+            filtered.append(line_a)
+        answer = '\n'.join(filtered)
+        answer = re.sub(r'\n*总结建议[。：]?\s*$', '', answer).strip()
+        answer = re.sub(r'总结建议[。：]?\s*\n*', '', answer).strip()
 
         return answer
