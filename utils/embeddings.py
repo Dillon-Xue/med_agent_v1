@@ -1,10 +1,10 @@
-import os
 import dashscope
 from langchain_core.embeddings import Embeddings
+from utils.config import get_embedding_model
 
 class DashscopeEmbeddings(Embeddings):
     def __init__(self):
-        self.model = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v4")
+        self.model = get_embedding_model()
 
     def embed_documents(self, texts):
         return [

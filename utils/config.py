@@ -7,11 +7,17 @@ load_dotenv()
 
 
 def get_llm_model():
-    return os.getenv("LLM_MODEL_NAME", "qwen-plus")
+    model = os.getenv("LLM_MODEL_NAME")
+    if not model:
+        raise ValueError("LLM_MODEL_NAME environment variable is not set")
+    return model
 
 
 def get_embedding_model():
-    return os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v4")
+    model = os.getenv("EMBEDDING_MODEL_NAME")
+    if not model:
+        raise ValueError("EMBEDDING_MODEL_NAME environment variable is not set")
+    return model
 
 
 def get_llm_provider() -> str:
