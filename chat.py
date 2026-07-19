@@ -19,6 +19,7 @@ from agents.supervisor import Supervisor
 from agents.agent_factory import get_agent
 from agents.aggregator import Aggregator
 from utils.config import setup_logging
+from utils.thread_context import doctor_id_var, tenant_id_var
 from utils.database import get_connection
 from tools.memory_tool import MemoryTool
 logger = logging.getLogger(__name__)
@@ -458,6 +459,9 @@ async def ask(req: ChatRequest, request: Request):
     logger.debug(f"[ASK] 所有 headers: {request.headers}")
     logger.info(f"[ASK] X-Trace-ID: {request.headers.get('X-Trace-ID')}")
     global current_session_user
+    if current_session_user and not doctor_id_var.get():
+        doctor_id_var.set(current_session_user)
+        tenant_id_var.set(get_current_tenant())
     question = req.question.strip()
     history = req.history
     session_id = request.headers.get("X-Session-ID")
@@ -467,6 +471,7 @@ async def ask(req: ChatRequest, request: Request):
         user_match = re.search(r'用户[：:]\s*(\S+)', question)
         if user_match:
             current_session_user = user_match.group(1)
+            doctor_id_var.set(current_session_user)
             logger.info(f"[身份声明] 当前用户设置为: {current_session_user}")
             return {
                 "success": True,
@@ -514,7 +519,7 @@ async def ask(req: ChatRequest, request: Request):
 
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
-        result = approval_tool.run(question)
+        result = await asyncio.to_thread(approval_tool.run, question)
         """
         try:
             from utils.audit import log_audit
@@ -736,6 +741,9 @@ async def consult(req: ChatRequest, request: Request):
     import asyncio
     import uuid
     global current_session_user
+    if current_session_user and not doctor_id_var.get():
+        doctor_id_var.set(current_session_user)
+        tenant_id_var.set(get_current_tenant())
     question = req.question.strip()
     history = req.history
 
@@ -744,6 +752,7 @@ async def consult(req: ChatRequest, request: Request):
         user_match = re.search(r'用户[：:]\s*(\S+)', question)
         if user_match:
             current_session_user = user_match.group(1)
+            doctor_id_var.set(current_session_user)
             logger.info(f"[Consult] 身份声明，当前用户设置为: {current_session_user}")
             return {
                 "success": True,
@@ -791,7 +800,7 @@ async def consult(req: ChatRequest, request: Request):
             name = name_match.group(1)
             info = name_match.group(2).strip()
             append = bool(re.search(r'追加患者|补充患者', question, re.IGNORECASE))
-            result = patient_tool.remember(name, info, append=append)
+            result = await asyncio.to_thread(patient_tool.remember, name, info, append=append)
             return {
                 "success": True,
                 "result": {
@@ -820,7 +829,7 @@ async def consult(req: ChatRequest, request: Request):
         logger.info(f"[Consult] 拦截到审批指令: {question}")
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
-        result = approval_tool.run(question)
+        result = await asyncio.to_thread(approval_tool.run, question)
 
         session_id = request.headers.get("X-Session-ID")
         if session_id:
@@ -834,6 +843,67 @@ async def consult(req: ChatRequest, request: Request):
                 "answer": result.get("answer", ""),
                 "tools_used": ["approval"],
                 "plan": {"question": question, "tools": ["approval"]},
+                "tool_results": [result]
+            },
+            "trace": {"executor": [result]}
+        }
+
+    # 查看患者信息拦截
+    view_match = re.search(r'(?:查看|查询|获取)(?:患者|病人)\s*([一-龥]{2,4}?)(?:\s*(?:的|信息|资料|情况)|$)', question)
+    if view_match:
+        logger.info(f"[Consult] 拦截到查看患者指令: {question}")
+        from tools.patient_tool import PatientTool
+        patient_tool = PatientTool()
+        name = view_match.group(1)
+        result = await asyncio.to_thread(patient_tool.search_patients, name)
+        _FIELD_MAP = {
+            'name': '姓名', 'gender': '性别', 'age': '年龄',
+            'id_card': '身份证号', 'phone': '电话', 'address': '地址',
+            'allergy': '过敏史', 'medication': '用药', 'symptoms': '症状',
+            'diagnosis': '诊断', 'info': '其他信息'
+        }
+        if result and len(result) > 0:
+            p = result[0]
+            info_lines = [f"📋 患者 {p.get('name', name)} 的信息："]
+            for k, v in p.items():
+                if v and k not in ['id', 'created_at', 'updated_at', 'tenant_id', 'doctor_id']:
+                    label = _FIELD_MAP.get(k, k)
+                    info_lines.append(f"- {label}: {v}")
+            answer = "\n".join(info_lines)
+        else:
+            answer = f"未找到患者 {name} 的档案"
+        _tool_result = {
+            "success": True,
+            "id": "patient_search_" + str(uuid.uuid4())[:8],
+            "source": "patient",
+            "answer": answer,
+            "debug": {"query_name": name, "results_count": len(result) if result else 0},
+            "trace": [],
+            "timestamp": time.time()
+        }
+        return {
+            "success": True,
+            "result": {
+                "answer": answer,
+                "tools_used": ["patient"],
+                "plan": {"question": question, "tools": ["patient"]},
+                "tool_results": [_tool_result]
+            },
+            "trace": {"executor": [_tool_result]}
+        }
+
+    # 报告生成拦截
+    if re.search(r"评估表|生成报告|生成病历|查看报告", question, re.IGNORECASE):
+        logger.info(f"[Consult] 拦截到报告生成指令: {question}")
+        from tools.report_tool import ReportTool
+        report_tool = ReportTool()
+        result = await asyncio.to_thread(report_tool.run, question)
+        return {
+            "success": True,
+            "result": {
+                "answer": result.get("answer", ""),
+                "tools_used": ["report"],
+                "plan": {"question": question, "tools": ["report"]},
                 "tool_results": [result]
             },
             "trace": {"executor": [result]}

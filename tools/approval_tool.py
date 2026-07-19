@@ -1,5 +1,6 @@
 import os, re, logging
 from utils.response import build_response
+from utils.thread_context import doctor_id_var, tenant_id_var
 from utils.crypto import encrypt_if_needed, decrypt_if_needed
 from utils.database import get_connection
 logger = logging.getLogger(__name__)
@@ -13,6 +14,9 @@ class ApprovalTool:
 
     def _get_doctor_id(self) -> str:
         """获取当前医生ID（用于数据隔离）"""
+        did = doctor_id_var.get()
+        if did:
+            return did
         try:
             import chat
             if hasattr(chat, 'current_session_user') and chat.current_session_user:
@@ -22,6 +26,9 @@ class ApprovalTool:
         return "default"
 
     def _get_tenant(self):
+        tid = tenant_id_var.get()
+        if tid and tid != "default":
+            return tid
         try:
             import chat
             if hasattr(chat, 'get_current_tenant'):

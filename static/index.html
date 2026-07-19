@@ -307,7 +307,7 @@
                 toolSpan.innerText = `🔧 使用工具: ${toolsUsed.join(', ')}`;
                 msgDiv.appendChild(toolSpan);
             }
-            if (role === 'assistant' && traceSessionId && currentMode === 'quick') {
+            if (role === 'assistant' && traceSessionId) {
                 const traceBtn = document.createElement('button');
                 traceBtn.className = 'trace-btn';
                 traceBtn.textContent = '🔍 查看推理过程';

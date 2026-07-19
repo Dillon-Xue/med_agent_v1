@@ -131,8 +131,8 @@ class Synthesizer:
         2. 禁止解释成分的功效作用（如"山楂消食化积"等），除非工具返回结果原文中明确写了这些内容。
         3. 禁止输出药物联用建议、饮食禁忌、注意事项等，除非工具返回结果原文中明确写了这些内容。
         4. 如果工具返回结果中已包含精确来源标注 (来源: xxx.pdf, 第 N 页，第 M 段)，你必须在对应信息末尾原样复制该标注。
-        5. 同一文档同一页的多条信息必须合并为一句表述，仅在该句末尾标注一次来源。禁止把每条信息单独成行并重复标注来源。
-        6. 如果工具返回结果中未包含精确来源标注，则使用工具来源格式：【来源：DRUG工具】、【来源：GUIDELINE工具】、【来源：LITERATURE工具】等。
+        5. 【关键】同一文档同一页的多条信息必须合并为一段连续表述，仅在该段末尾标注一次来源。严禁把每条信息单独成行并每行都标注来源。如果所有信息均来自同一文档同一页，整个回答只标注一次来源即可。
+        6. 如果工具返回结果中未包含精确来源标注，则该信息不标注来源，严禁使用【来源：XX工具】等粗粒度格式。
         7. 严禁使用任何指南名称、共识名称、期刊名称或权威机构名称作为来源。
         8. 绝对禁止将精确来源格式替换为粗粒度格式。
         9. 只有一个工具返回了有效信息时，禁止输出"总结建议"。
@@ -145,6 +145,10 @@ class Synthesizer:
         16. 只有一个工具返回有效信息时，绝对禁止输出"总结建议"。
         17. 绝对禁止输出模型推理内容，如"来源: 模型推理，请核实"。
         18. 绝对禁止对同一内容重复输出多行"⚠️"警示。
+        19. 【格式强制】每个要点独立一行，以"- "开头。同一来源的所有信息合并为一段，仅在该段末尾标注一次来源。严禁每条信息后都重复标注来源。
+        20. 【诊断前提】如果用户没有明确诊断就询问"可以吃什么药"，禁止枚举所有可能的疾病和对应药物。必须先说明"需要明确诊断"，然后仅针对资料中确实提及的相关内容给出建议。
+        21. 绝对禁止在回答中输出字数统计，如"（字数：XXX）"、"共XXX字"等任何与字数相关的提示信息。
+        22. 绝对禁止用科室名称（如【心外科】【药剂科】【全科】等）作为来源标注。只能使用工具返回结果中的精确来源格式（来源: xxx.pdf, 第 N 页，第 M 段）。
         """
 
         user_prompt = f"""{length_instruction}
@@ -156,7 +160,8 @@ class Synthesizer:
     {combined}
 
     请严格按照上述纯文本格式要求给出综合回答，不要使用任何 markdown 语法。
-    要求：同类信息必须合并为一句简洁表述，只在末尾标注一次来源。禁止逐条拆分重复标注。"""
+    要求：同类信息必须合并为一句简洁表述，只在末尾标注一次来源。禁止逐条拆分重复标注。
+    如果用户没有明确诊断就问"可以吃什么药"，禁止列出所有可能的疾病和药物组合，只给出资料中确实相关的建议，并提醒需要医生确诊。"""
 
         try:
             resp = self.client.chat.completions.create(
@@ -186,11 +191,37 @@ class Synthesizer:
         # 不在最终回答中附加历史参考病例
 
 
+        # 后处理：合并重复的来源标注
+        def _merge_duplicate_sources(text: str) -> str:
+            lines = text.split('\n')
+            source_pattern = re.compile(r'[（(]来源:\s*([^)]+\.pdf)[,，]\s*第\s*(\d+)\s*页[^）)]*[）)]')
+            result_lines = []
+            prev_source = None
+            for line in lines:
+                match = source_pattern.search(line)
+                if match:
+                    src_key = f"{match.group(1).strip()}|{match.group(2).strip()}"
+                    if prev_source and src_key == prev_source:
+                        # Same source as previous line, remove this source annotation
+                        line = line[:match.start()] + line[match.end():]
+                        line = line.rstrip()
+                    prev_source = src_key
+                else:
+                    prev_source = None
+                result_lines.append(line)
+            return '\n'.join(result_lines)
+
+        answer = _merge_duplicate_sources(answer)
+
         # 后处理过滤
         skip_phrases = [
             "资料中未提供", "未提供相关", "未找到相关", "现有资料不足",
             "无法提供", "没有相关信息", "未提及相关", "无法回答",
-            "模型推理", "请核实", "来源: 模型推理"
+            "模型推理", "请核实", "来源: 模型推理",
+            "现有资料未提供", "资料未明确提及", "未明确提及",
+            "缺乏儿童剂量数据", "不能给出具体", "不可直接换算", "需要明确诊断", "请在医生指导下", "建议就医",
+            "不在资料中", "未在资料中", "未在所提供资料中",
+            "字数："
         ]
         lines_ans = answer.split('\n')
         filtered = []
@@ -201,14 +232,24 @@ class Synthesizer:
                 continue
             if s.startswith('【来源：') and s.endswith('工具】'):
                 continue
+            if '【来源：' in s and '工具】' in s:
+                continue
             if '来源: 模型推理' in s or '来源：模型推理' in s:
                 continue
             if s.startswith('【历史参考病例】') or s.startswith('【历史参考】'):
                 continue
             if any(p in s for p in skip_phrases) and '⚠️' in s:
                 continue
-            if any(p in s for p in skip_phrases) and len(s) < 50:
+            if any(p in s for p in skip_phrases) and len(s) < 120:
                 continue
+            if '缺乏' in s and '数据' in s and ('无法' in s or '不能' in s):
+                continue
+            if '不在资料中' in s or '未在资料中' in s:
+                continue
+            if '字数：' in s:
+                continue
+            # 移除粗粒度科室标签，但保留内容
+            line_a = re.sub(r'【心外科】|【药剂科】|【全科】|【来源：[^】]+】', '', line_a)
             filtered.append(line_a)
         answer = '\n'.join(filtered)
         answer = re.sub(r'\n*总结建议[。：]?\s*$', '', answer).strip()

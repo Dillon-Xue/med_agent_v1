@@ -1,5 +1,6 @@
 import os, re, json, time, logging
 from utils.response import build_response
+from utils.thread_context import doctor_id_var, tenant_id_var
 from openai import OpenAI
 from utils.audit import log_audit
 from utils.crypto import encrypt_if_needed, decrypt_if_needed
@@ -69,6 +70,9 @@ class PatientTool:
         conn.close()
 
     def _get_tenant(self):
+        tid = tenant_id_var.get()
+        if tid and tid != "default":
+            return tid
         try:
             import chat
             if hasattr(chat, 'get_current_tenant'):
@@ -79,6 +83,9 @@ class PatientTool:
 
      # 🆕 获取当前医生 ID
     def _get_doctor_id(self) -> str:
+        did = doctor_id_var.get()
+        if did:
+            return did
         try:
             import chat
             if hasattr(chat, 'current_session_user') and chat.current_session_user:

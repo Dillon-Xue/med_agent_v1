@@ -547,6 +547,8 @@ class ConsultGraph:
 
         if history:
             for msg in history:
+                if not isinstance(msg, dict):
+                    continue
                 if msg.get("role") == "system":
                     content_part = msg.get("content", "")
                     if "【文件内容】" in content_part or "文件内容" in content_part:
@@ -623,6 +625,14 @@ class ConsultGraph:
                 if candidate not in invalid_names:
                     name = candidate
                     self._log(f"从生成命令提取姓名: {name}")
+        # 2b. 匹配 "给XXX生成/查看/评估..." 格式
+        if not name:
+            name_match = re.search(r'(?:给|帮|为|替)\s*([\u4e00-\u9fa5]{2,4})\s*(?:生成|查看|评估|开|做)', all_user_text)
+            if name_match:
+                candidate = name_match.group(1)
+                if candidate not in invalid_names:
+                    name = candidate
+                    self._log(f"从给命令提取姓名: {name}")
 
         # 3. 匹配 "我是XXX" / "我叫XXX" / "患者XXX" 格式
         if not name:
