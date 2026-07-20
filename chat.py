@@ -1,4 +1,4 @@
-import os, re, json, hashlib, time, logging, pymysql, asyncio, httpx, requests, io
+﻿import os, re, json, hashlib, time, logging, pymysql, asyncio, httpx, requests, io
 from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -156,6 +156,10 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get('''/''')
+async def read_root():
+    return FileResponse('''static/index.html''')
 
 # =========================
 # 租户上下文
@@ -727,6 +731,18 @@ async def _execute_ask(question: str, history: list, trace_id: str, cache_key: s
 
     return result
 
+def _secure_log(text: str) -> str:
+    """对日志中的敏感信息进行加密后返回。只要包含身份证号、手机号或中文，即整句加密，避免漏判姓名。"""
+    if not text or not isinstance(text, str):
+        return text
+    import re
+    from utils.crypto import encrypt_if_needed
+    # 若包含身份证号、手机号或任何中文，则整句加密
+    if re.search(r'\b\d{17}[\dXx]\b|\b1[3-9]\d{9}\b|[\u4e00-\u9fa5]', text):
+        return encrypt_if_needed(text)
+    return text
+
+
 # =========================
 # 智能问诊端点 (/consult)
 # =========================
@@ -792,7 +808,7 @@ async def consult(req: ChatRequest, request: Request):
 
     # 患者操作拦截
     if re.search(r'记住患者|记录患者|追加患者|补充患者', question, re.IGNORECASE):
-        logger.info(f"[Consult] 拦截到患者操作: {question}")
+        logger.info(f"[Consult] 拦截到患者操作: {_secure_log(question)}")
         from tools.patient_tool import PatientTool
         patient_tool = PatientTool()
         name_match = re.search(r'(?:记住患者|记录患者|追加患者|补充患者)\s*([\u4e00-\u9fa5]{2,4})\s*[:：]?\s*(.+)', question)
@@ -826,7 +842,7 @@ async def consult(req: ChatRequest, request: Request):
     # 审批指令拦截
     approval_keywords = ["待审批", "审批通过", "驳回", "已通过", "已驳回", "全部列表", "审批列表"]
     if any(kw in question for kw in approval_keywords):
-        logger.info(f"[Consult] 拦截到审批指令: {question}")
+        logger.info(f"[Consult] 拦截到审批指令: {_secure_log(question)}")
         from tools.approval_tool import ApprovalTool
         approval_tool = ApprovalTool()
         result = await asyncio.to_thread(approval_tool.run, question)
@@ -851,7 +867,7 @@ async def consult(req: ChatRequest, request: Request):
     # 查看患者信息拦截
     view_match = re.search(r'(?:查看|查询|获取)(?:患者|病人)\s*([一-龥]{2,4}?)(?:\s*(?:的|信息|资料|情况)|$)', question)
     if view_match:
-        logger.info(f"[Consult] 拦截到查看患者指令: {question}")
+        logger.info(f"[Consult] 拦截到查看患者指令: {_secure_log(question)}")
         from tools.patient_tool import PatientTool
         patient_tool = PatientTool()
         name = view_match.group(1)
@@ -894,7 +910,7 @@ async def consult(req: ChatRequest, request: Request):
 
     # 报告生成拦截
     if re.search(r"评估表|生成报告|生成病历|查看报告", question, re.IGNORECASE):
-        logger.info(f"[Consult] 拦截到报告生成指令: {question}")
+        logger.info(f"[Consult] 拦截到报告生成指令: {_secure_log(question)}")
         from tools.report_tool import ReportTool
         report_tool = ReportTool()
         result = await asyncio.to_thread(report_tool.run, question)
@@ -1241,6 +1257,21 @@ async def add_trace_step(session_id: str, step_type: str, data: dict):
         })
     return {"status": "ok"}
 
+
+# =========================
+# 用户切换端点
+# =========================
+@app.post('''/switch_user''')
+async def switch_user(request: Request):
+    global current_session_user
+    data = await request.json()
+    name = data.get('''name''', '''''')
+    if name:
+        current_session_user = name
+        doctor_id_var.set(name)
+        return { '''success''': True, '''user''': name }
+    return { '''success''': False, '''error''': '''Name required''' }
+
 @app.get("/trace/{session_id}")
 async def get_trace(session_id: str):
     """获取完整的追踪链路"""
@@ -1314,7 +1345,7 @@ async def get_approval_detail(approval_id: str, request: Request):
                 success=False,
                 error=f"您没有权限查看此审批项"
             )
-        from utils.crypto import decrypt_if_needed
+        from utils.crypto import encrypt_if_needed, decrypt_if_needed
         content = decrypt_if_needed(row.get('content')) if row.get('content') else ""
         return ApprovalDetailResponse(
             success=True,

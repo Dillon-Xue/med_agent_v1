@@ -1,204 +1,805 @@
-<!DOCTYPE html>
-<html>
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>医疗Agent问答</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Med Agent 智能医疗辅助平台</title>
     <style>
-        /* ===== 全局样式 ===== */
-        body { max-width: 1400px; margin: 20px auto; padding: 0 20px; font-family: Arial, sans-serif; }
-        h2 { margin-top: 0; }
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --primary-light: #dbeafe;
+            --secondary: #f8fafc;
+            --text-main: #1e293b;
+            --text-secondary: #64748b;
+            --border: #e2e8f0;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --shadow: 0 1px 3px rgba(0,0,0,0.1);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1);
+            --radius: 8px;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #f1f5f9;
+            color: var(--text-main);
+            height: 100vh;
+            overflow: hidden;
+        }
 
-        /* ===== 模式切换按钮 ===== */
-        .mode-btn { padding: 8px 16px; border: 2px solid #ccc; background: #f5f5f5; cursor: pointer; border-radius: 6px; font-size: 14px; font-weight: normal; color: #555; transition: all 0.2s ease; }
-        .mode-btn:hover { background: #e8e8e8; border-color: #aaa; }
-        .mode-btn.active { background: #1a73e8; color: #ffffff; font-weight: bold; border-color: #1a73e8; box-shadow: 0 2px 8px rgba(26, 115, 232, 0.4); }
+        /* Header */
+        .app-header {
+            height: 56px;
+            background: linear-gradient(90deg, #1e40af 0%, #3b82f6 100%);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            box-shadow: var(--shadow-md);
+            z-index: 100;
+            position: relative;
+        }
+        .app-header .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        .app-header .brand svg {
+            width: 28px;
+            height: 28px;
+        }
+        .app-header .user-info {
+            font-size: 13px;
+            opacity: 0.9;
+            background: rgba(255,255,255,0.15);
+            padding: 4px 12px;
+            border-radius: 20px;
+        }
 
-        /* ===== 主布局 ===== */
-        .main-container { display: flex; gap: 16px; min-height: calc(100vh - 160px); height: auto; }
+        /* Layout */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 56px);
+        }
 
-        /* ===== 侧边栏 ===== */
-        .sidebar { width: 220px; min-width: 180px; background: #f5f5f5; border-right: 1px solid #ddd; padding: 12px; overflow-y: auto; flex-shrink: 0; border-radius: 8px 0 0 8px; }
-        .sidebar .tab-btn { display: block; width: 100%; padding: 10px 12px; border: none; background: transparent; text-align: left; font-size: 14px; cursor: pointer; border-radius: 6px; margin-bottom: 4px; position: relative; }
-        .sidebar .tab-btn:hover { background: #e8e8e8; }
-        .sidebar .tab-btn.active { background: #1a73e8; color: white; }
-        .sidebar .badge { float: right; background: #e74c3c; color: white; border-radius: 50%; padding: 0 8px; font-size: 12px; line-height: 20px; min-width: 20px; text-align: center; }
-        .sidebar .tab-content { display: none; margin-top: 10px; }
-        .sidebar .tab-content.active { display: block; }
-        .sidebar .tab-content p { font-size: 12px; color: #888; margin: 4px 0; }
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: #fff;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+        .sidebar-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 14px 0;
+            text-align: center;
+            font-size: 14px;
+            color: var(--text-secondary);
+            background: none;
+            border: none;
+            cursor: pointer;
+            position: relative;
+            transition: all .2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .tab-btn:hover {
+            color: var(--primary);
+            background: #f8fafc;
+        }
+        .tab-btn.active {
+            color: var(--primary);
+            font-weight: 600;
+        }
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 20%;
+            width: 60%;
+            height: 2px;
+            background: var(--primary);
+        }
+        .tab-btn .badge {
+            background: var(--danger);
+            color: #fff;
+            font-size: 11px;
+            padding: 1px 6px;
+            border-radius: 10px;
+            min-width: 18px;
+            text-align: center;
+        }
 
-        /* ===== 会话管理 ===== */
-        .session-section { margin-top: 8px; border-top: 1px solid #ddd; padding-top: 8px; }
-        .session-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-        .session-header .session-label { font-size: 12px; font-weight: bold; color: #555; }
-        .session-header .session-new-btn { font-size: 12px; padding: 2px 10px; background: #1a73e8; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-        .session-header .session-new-btn:hover { background: #1557b0; }
-        #sessionList { max-height: 180px; overflow-y: auto; font-size: 13px; }
-        .session-item { padding: 6px 10px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 2px; transition: background 0.2s; }
-        .session-item:hover { background: #e8f0fe; }
-        .session-item.active { background: #d2e3fc; font-weight: bold; }
-        .session-item .session-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .session-item .session-delete { color: #999; font-size: 14px; cursor: pointer; padding: 0 4px; display: none; }
-        .session-item:hover .session-delete { display: inline; }
-        .session-item .session-delete:hover { color: #e74c3c; }
+        .tab-content {
+            display: none;
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+        .tab-content.active {
+            display: block;
+        }
 
-        /* ===== 聊天区 ===== */
-        .chat-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-        #chat { flex: 1; border: 1px solid #ccc; overflow-y: auto; padding: 15px; background: #fafafa; border-radius: 8px; margin-bottom: 10px; height: 500px; max-height: calc(100vh - 300px); }
-        .user { text-align: right; color: #1a73e8; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
-        .assistant { text-align: left; color: #2e7d32; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
-        .assistant a { color: #1a73e8; text-decoration: underline; }
-        .assistant a:hover { color: #1557b0; }
-        .tool-info { font-size: 0.8em; color: #5f6368; margin-top: 4px; }
+        .tenant-display {
+            font-size: 12px;
+            color: var(--text-secondary);
+            padding: 10px 12px;
+            background: #f8fafc;
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            border: 1px solid var(--border);
+        }
 
-        /* ===== 输入区 ===== */
-        .input-area { display: flex; gap: 10px; flex-shrink: 0; align-items: flex-start; }
-        .input-area textarea { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; resize: none; font-family: inherit; height: 42px; min-height: 42px; max-height: 200px; overflow-y: auto; box-sizing: border-box; }
-        .input-area button { padding: 10px 24px; font-size: 16px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; cursor: pointer; height: 42px; flex-shrink: 0; }
-        .input-area button:hover { background: #1557b0; }
-        .mode-selector { margin-bottom: 10px; flex-shrink: 0; display: flex; gap: 8px; }
+        .session-section {
+            margin-bottom: 16px;
+        }
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .session-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .session-new-btn {
+            padding: 4px 10px;
+            background: var(--primary-light);
+            color: var(--primary);
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all .2s;
+        }
+        .session-new-btn:hover {
+            background: var(--primary);
+            color: #fff;
+        }
+        .session-item {
+            padding: 10px 12px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+            transition: all .15s;
+            color: var(--text-main);
+        }
+        .session-item:hover {
+            background: #f1f5f9;
+        }
+        .session-item.active {
+            background: var(--primary-light);
+            color: var(--primary-dark);
+            font-weight: 500;
+        }
+        .session-search { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; margin-bottom: 10px; outline: none; transition: all .2s; background: #fff; }
+        .session-search:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.08); }
+        .session-actions { display: flex; gap: 4px; align-items: center; }
+        .session-pin, .session-rename { opacity: 0; cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 12px; transition: all .2s; }
+        .session-item:hover .session-pin, .session-item:hover .session-rename { opacity: 1; }
+        .session-pin:hover { background: #fef3c7; }
+        .session-rename:hover { background: #dbeafe; }
+        .session-delete {
+            opacity: 0;
+            color: var(--danger);
+            font-size: 12px;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 4px;
+            transition: opacity .2s;
+        }
+        .session-item:hover .session-delete {
+            opacity: 1;
+        }
+        .session-delete:hover {
+            background: #fee2e2;
+        }
 
-        /* ===== 审批列表 ===== */
-        #approval-list ul { list-style: none; padding: 0; margin: 0; }
-        #approval-list li { padding: 8px 0; border-bottom: 1px solid #eee; }
-        #approval-list li strong { font-size: 14px; }
-        #approval-list li small { color: #888; font-size: 12px; display: block; margin-top: 2px; }
-        #approval-list .empty { color: #888; text-align: center; padding: 20px 0; }
-        #approval-list .refresh-btn { margin-top: 10px; width: 100%; padding: 8px; background: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; }
-        #approval-list .refresh-btn:hover { background: #ddd; }
+        #approval-list ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        #approval-list li {
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all .2s;
+            background: #fff;
+        }
+        #approval-list li:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow);
+            transform: translateX(2px);
+        }
+        #approval-list li:active {
+            transform: scale(0.99);
+        }
+        #approval-list li .approval-id {
+            font-weight: 600;
+            color: var(--primary);
+            font-size: 13px;
+            margin-right: 6px;
+        }
+        #approval-list li .approval-title {
+            font-size: 14px;
+            color: var(--text-main);
+        }
+        #approval-list li .approval-meta {
+            color: var(--text-secondary);
+            font-size: 12px;
+            display: block;
+            margin-top: 6px;
+        }
+        #approval-list li .click-hint {
+            float: right;
+            color: var(--text-secondary);
+            font-size: 12px;
+            opacity: 0;
+            transition: opacity .3s;
+        }
+        #approval-list li:hover .click-hint {
+            opacity: 1;
+        }
+        #approval-list .empty {
+            color: var(--text-secondary);
+            text-align: center;
+            padding: 20px 0;
+            font-size: 13px;
+        }
+        .refresh-btn {
+            margin-top: 10px;
+            width: 100%;
+            padding: 8px;
+            background: #f1f5f9;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all .2s;
+        }
+        .refresh-btn:hover {
+            background: var(--primary-light);
+            color: var(--primary);
+            border-color: var(--primary);
+        }
 
-        /* 上传进度条 */
-        .upload-progress { display: none; margin: 10px 0; padding: 12px 16px; background: #f5f5f5; border-radius: 8px; }
-        .upload-progress.active { display: block; }
-        .upload-progress .progress-bar { width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; margin-top: 8px; }
-        .upload-progress .progress-bar .fill { height: 100%; width: 0%; background: #1a73e8; border-radius: 3px; transition: width 0.3s ease; }
-        .upload-progress .progress-text { font-size: 13px; color: #555; }
+        /* Chat Area */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #f8fafc;
+            overflow: hidden;
+        }
 
-        /* ===== Trace 模态框 ===== */
-        .trace-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
-        .trace-modal.active { display: flex; }
-        .trace-modal .modal-content { background: #fff; width: 90%; max-width: 800px; max-height: 80vh; border-radius: 12px; padding: 24px; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
-        .trace-modal .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 16px; }
-        .trace-modal .modal-header h3 { margin: 0; }
-        .trace-modal .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #888; }
-        .trace-modal .modal-close:hover { color: #333; }
-        .trace-step { border-left: 3px solid #1a73e8; padding-left: 16px; margin-bottom: 16px; background: #f8f9fa; border-radius: 4px; padding: 12px 16px; }
-        .trace-step .step-header { font-weight: bold; color: #1a73e8; margin-bottom: 4px; }
-        .trace-step .step-header .step-time { font-weight: normal; color: #888; font-size: 12px; margin-left: 8px; }
-        .trace-step .step-detail { font-size: 13px; color: #333; white-space: pre-wrap; word-wrap: break-word; }
-        .trace-step .step-detail code { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
-        .trace-step .step-detail .tool-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
-        .trace-step .step-detail .tool-tag { background: #e8f0fe; color: #1a73e8; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
-        .trace-btn { font-size: 12px; color: #888; background: none; border: none; cursor: pointer; margin-top: 4px; padding: 2px 8px; border-radius: 4px; }
-        .trace-btn:hover { background: #f0f0f0; color: #1a73e8; }
+        .mode-selector {
+            height: 52px;
+            background: #fff;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 0 20px;
+            flex-shrink: 0;
+        }
+        .mode-btn {
+            padding: 6px 20px;
+            border-radius: 20px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all .2s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .mode-btn:hover {
+            color: var(--text-main);
+            background: #f1f5f9;
+        }
+        .mode-btn.active {
+            background: var(--primary);
+            color: #fff;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(37,99,235,0.3);
+        }
 
-        /* ===== 审批详情模态框 ===== */
-        .approval-detail-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
-        .approval-detail-modal.active { display: flex; }
-        .approval-detail-modal .modal-content { background: #fff; width: 90%; max-width: 700px; max-height: 80vh; border-radius: 12px; padding: 24px; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
-        .approval-detail-modal .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 16px; }
-        .approval-detail-modal .modal-header h3 { margin: 0; }
-        .approval-detail-modal .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #888; }
-        .approval-detail-modal .modal-close:hover { color: #333; }
-        .approval-detail-modal .detail-field { margin-bottom: 12px; }
-        .approval-detail-modal .detail-field .label { font-weight: bold; color: #555; font-size: 13px; margin-bottom: 2px; }
-        .approval-detail-modal .detail-field .value { font-size: 14px; color: #333; background: #f5f5f5; padding: 8px 12px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; }
-        .approval-detail-modal .status-badge { display: inline-block; padding: 2px 12px; border-radius: 12px; font-size: 13px; font-weight: bold; }
-        .approval-detail-modal .status-badge.pending { background: #fff3cd; color: #856404; }
-        .approval-detail-modal .status-badge.approved { background: #d4edda; color: #155724; }
-        .approval-detail-modal .status-badge.rejected { background: #f8d7da; color: #721c24; }
+        #chat {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
 
-        /* ===== 审批列表（增强版） ===== */
-        #approval-list ul { list-style: none; padding: 0; margin: 0; }
-        #approval-list li { padding: 10px 12px; border-bottom: 1px solid #eee; border-radius: 6px; cursor: pointer; transition: all 0.2s ease; }
-        #approval-list li:hover { background: #e8f0fe; transform: translateX(4px); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-        #approval-list li:active { transform: scale(0.98); }
-        #approval-list li .approval-id { font-weight: bold; color: #1a73e8; font-size: 13px; }
-        #approval-list li .approval-title { font-size: 14px; color: #333; margin-left: 6px; }
-        #approval-list li .approval-meta { color: #888; font-size: 12px; display: block; margin-top: 4px; }
-        #approval-list li .click-hint { float: right; color: #aaa; font-size: 12px; opacity: 0; transition: opacity 0.3s ease; }
-        #approval-list li:hover .click-hint { opacity: 1; }
-        #approval-list .empty { color: #888; text-align: center; padding: 20px 0; }
-        #approval-list .refresh-btn { margin-top: 10px; width: 100%; padding: 8px; background: #e8e8e8; border: none; border-radius: 4px; cursor: pointer; }
-        #approval-list .refresh-btn:hover { background: #ddd; }
+        /* Messages */
+        .user, .assistant {
+            max-width: 85%;
+            padding: 14px 18px;
+            border-radius: 16px;
+            font-size: 14px;
+            line-height: 1.7;
+            word-break: break-word;
+            animation: msgIn .3s ease;
+            position: relative;
+        }
+        @keyframes msgIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, var(--primary) 0%, #3b82f6 100%);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 2px 8px rgba(37,99,235,0.2);
+        }
+        .user a {
+            color: #dbeafe;
+            text-decoration: underline;
+        }
+        .assistant {
+            align-self: flex-start;
+            background: #fff;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+            box-shadow: var(--shadow);
+        }
+        .user > strong:first-child,
+        .assistant > strong:first-child {
+            display: none;
+        }
+        .user::before {
+            content: '您';
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            opacity: 0.8;
+            margin-bottom: 4px;
+        }
+        .assistant::before {
+            content: '助手';
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 4px;
+        }
+
+        .tool-info {
+            margin-top: 10px;
+            padding: 6px 12px;
+            background: rgba(37,99,235,0.08);
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--primary-dark);
+        }
+        .user .tool-info {
+            background: rgba(255,255,255,0.15);
+            color: #dbeafe;
+        }
+
+        .trace-btn {
+            margin-top: 10px;
+            padding: 6px 14px;
+            background: var(--primary-light);
+            color: var(--primary-dark);
+            border: none;
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all .2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .trace-btn:hover {
+            background: #bfdbfe;
+        }
+
+        /* Input Area */
+        .input-area {
+            background: #fff;
+            border-top: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: flex-end;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        #question {
+            flex: 1;
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 16px;
+            min-height: 48px;
+            max-height: 160px;
+            resize: none;
+            font-size: 14px;
+            line-height: 1.5;
+            outline: none;
+            transition: all .2s;
+            font-family: inherit;
+        }
+        #question:focus {
+            border-color: var(--primary);
+            background: #fff;
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+        }
+        .input-area button {
+            padding: 12px 20px;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all .2s;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .input-area button:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(37,99,235,0.3);
+        }
+        .input-area button:active {
+            transform: translateY(0);
+        }
+
+        /* Upload Progress */
+        .upload-progress {
+            position: fixed;
+            bottom: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 20px;
+            box-shadow: var(--shadow-md);
+            display: none;
+            min-width: 300px;
+            z-index: 200;
+        }
+        .upload-progress.active {
+            display: block;
+        }
+        .progress-text {
+            font-size: 13px;
+            color: var(--text-main);
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .progress-bar {
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .progress-bar .fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #60a5fa);
+            width: 0%;
+            transition: width .3s ease;
+        }
+
+        /* Modals */
+        .trace-modal, .approval-detail-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15,23,42,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(4px);
+        }
+        .trace-modal.active, .approval-detail-modal.active {
+            display: flex;
+        }
+        .trace-modal .modal-content, .approval-detail-modal .modal-content {
+            background: #fff;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 720px;
+            max-height: 85vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.15);
+        }
+        .trace-modal .modal-header, .approval-detail-modal .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f8fafc;
+        }
+        .trace-modal .modal-header h3, .approval-detail-modal .modal-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-main);
+            margin: 0;
+        }
+        .modal-close {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: #e2e8f0;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            line-height: 1;
+            transition: all .2s;
+        }
+        .modal-close:hover {
+            background: #cbd5e1;
+            color: var(--text-main);
+        }
+        .trace-modal #traceBody, .approval-detail-modal #approvalDetailBody {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        /* Trace Steps */
+        .trace-step {
+            margin-bottom: 16px;
+            padding: 14px 16px;
+            background: #f8fafc;
+            border-radius: var(--radius);
+            border-left: 3px solid var(--primary);
+        }
+        .trace-step .step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .trace-step .step-header .step-name {
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--primary-dark);
+        }
+        .trace-step .step-header .step-time {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .trace-step .step-detail {
+            font-size: 13px;
+            color: var(--text-main);
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .trace-step .step-detail code {
+            background: #e2e8f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .trace-step .step-detail .tool-list {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+        .trace-step .step-detail .tool-tag {
+            background: var(--primary-light);
+            color: var(--primary-dark);
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+
+        /* Approval Detail */
+        .approval-detail-modal .detail-field {
+            margin-bottom: 14px;
+        }
+        .approval-detail-modal .detail-field .label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .approval-detail-modal .detail-field .value {
+            font-size: 14px;
+            color: var(--text-main);
+            background: #f8fafc;
+            padding: 10px 14px;
+            border-radius: var(--radius);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.6;
+            border: 1px solid var(--border);
+        }
+        .approval-detail-modal .status-badge {
+            display: inline-block;
+            padding: 3px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .approval-detail-modal .status-badge.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .approval-detail-modal .status-badge.approved {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .approval-detail-modal .status-badge.rejected {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* Empty hint in chat */
+        #chat > p {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-top: 40px;
+            font-size: 14px;
+        }
+
+        .user-menu { position: relative; }
+        .user-menu-btn { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 4px 12px; border-radius: 20px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 13px; transition: background .2s; }
+        .user-menu-btn:hover { background: rgba(255,255,255,0.25); }
+        .user-dropdown { display: none; position: absolute; right: 0; top: 44px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); min-width: 140px; z-index: 200; overflow: hidden; }
+        .user-dropdown.show { display: block; }
+        .user-dropdown-item { padding: 10px 16px; font-size: 13px; color: var(--text-main); cursor: pointer; transition: background .15s; }
+        .user-dropdown-item:hover { background: var(--primary-light); color: var(--primary-dark); }
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar { display: none; }
+            .user, .assistant { max-width: 95%; }
+        }
     </style>
 </head>
 <body>
-    <h2>🏥 医学问答助手</h2>
-    <div class="main-container">
+    <header class="app-header">
+        <div class="brand">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+            <span>Med Agent 智能医疗辅助平台</span>
+        </div>
+        <div class="user-menu" id="userMenu">
+            <button class="user-menu-btn" onclick="toggleUserMenu()">
+                <span id="currentUserName">超级管理员</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="user-dropdown" id="userDropdown">
+                <div class="user-dropdown-item" onclick="switchUser('超级管理员')">超级管理员</div>
+                <div class="user-dropdown-item" onclick="switchUser('医生A')">医生A</div>
+                <div class="user-dropdown-item" onclick="switchUser('医生B')">医生B</div>
+            </div>
+        </div>
+    </header>
 
-        <!-- ===== 侧边栏 ===== -->
-        <div class="sidebar" id="sidebar">
-            <div class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">💬 医药助手</div>
-            <div class="tab-btn" data-tab="approval" onclick="switchTab('approval')">
-                📋 审批助手
-                <span class="badge" id="approval-badge">0</span>
+    <div class="main-container">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-tabs">
+                <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">医药助手</button>
+                <button class="tab-btn" data-tab="approval" onclick="switchTab('approval')">
+                    审批助手
+                    <span class="badge" id="approval-badge">0</span>
+                </button>
             </div>
             <div class="tab-content active" id="tab-chat">
-                <p>当前租户：<span id="tenant-display">default</span></p>
-                <!-- ===== 会话管理区域 ===== -->
+                <input type="text" class="session-search" id="sessionSearch" placeholder="搜索会话..." oninput="filterSessions()">
                 <div class="session-section">
                     <div class="session-header">
-                        <span class="session-label">💬 会话</span>
+                        <span class="session-label">会话列表</span>
                         <button class="session-new-btn" onclick="createNewSession()">+ 新建</button>
                     </div>
                     <div id="sessionList"></div>
                 </div>
-                <p style="font-size:12px; color:#aaa; margin-top:8px;">💡 智能问诊输入「我是XXX」绑定患者</p>
+                <p style="font-size:12px; color:#94a3b8; margin-top:12px; padding:0 4px;">
+                    提示：智能问诊输入「我是XXX」绑定患者
+                </p>
             </div>
             <div class="tab-content" id="tab-approval">
                 <div id="approval-list"><p class="empty">加载中...</p></div>
-                <button class="refresh-btn" onclick="refreshApprovals()">🔄 刷新</button>
+                <button class="refresh-btn" onclick="refreshApprovals()">刷新列表</button>
             </div>
-        </div>
+        </aside>
 
-        <!-- ===== 聊天区 ===== -->
         <div class="chat-area">
             <div class="mode-selector">
-                <button id="mode-quick" class="mode-btn active" onclick="setMode('quick')">⚡ 快速问答</button>
-                <button id="mode-consult" class="mode-btn" onclick="setMode('consult')">🩺 智能问诊</button>
+                <button id="mode-quick" class="mode-btn active" onclick="setMode('quick')">快速问答</button>
+                <button id="mode-consult" class="mode-btn" onclick="setMode('consult')">智能问诊</button>
             </div>
             <div id="chat"></div>
 
-            <!-- 上传进度条 -->
             <div class="upload-progress" id="uploadProgress">
-                <div class="progress-text" id="progressText">📤 正在上传...</div>
-                <div class="progress-bar">
-                    <div class="fill" id="progressFill"></div>
+                <div class="progress-text">
+                    <span id="progressText">正在上传...</span>
                 </div>
+                <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
             </div>
 
             <div class="input-area">
-                <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.pdf,.docx,.xlsx" multiple style="display:none;">
-                <button onclick="document.getElementById('fileInput').click()" style="padding:10px 16px; background:#1a73e8; color:#ffffff; border:none; border-radius:6px; cursor:pointer; font-weight:500; white-space:nowrap;">📎 上传文件</button>
-                <textarea id="question" placeholder="输入医学问题...（Shift+Enter 换行）" rows="1" style="flex:1; padding:10px; font-size:16px; border:1px solid #ccc; border-radius:6px; resize:none; font-family:inherit; min-height:42px; max-height:200px; overflow-y:auto;"></textarea>
+                <textarea id="question" placeholder="输入医学问题...（Shift+Enter 换行）" rows="1"></textarea>
+                <button onclick="document.getElementById('fileInput').click()">上传文件</button>
                 <button onclick="send()">发送</button>
             </div>
         </div>
     </div>
 
-    <!-- ===== Trace 模态框 ===== -->
+    <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.pdf,.docx,.xlsx" multiple style="display:none;">
+
     <div class="trace-modal" id="traceModal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>🔍 推理过程</h3>
+                <h3>推理过程</h3>
                 <button class="modal-close" onclick="closeTrace()">&times;</button>
             </div>
-            <div id="traceBody"><p style="color:#888;">加载中...</p></div>
+            <div id="traceBody"><p style="color:#94a3b8;">加载中...</p></div>
         </div>
     </div>
 
-    <!-- ===== 审批详情模态框 ===== -->
     <div class="approval-detail-modal" id="approvalDetailModal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 id="approvalDetailTitle">📋 审批详情</h3>
+                <h3 id="approvalDetailTitle">审批详情</h3>
                 <button class="modal-close" onclick="closeApprovalDetail()">&times;</button>
             </div>
-            <div id="approvalDetailBody"><p style="color:#888;">加载中...</p></div>
+            <div id="approvalDetailBody"><p style="color:#94a3b8;">加载中...</p></div>
         </div>
     </div>
 
-    <script>
+<script>
         // ============================================================
         // 会话 ID 管理
         // ============================================================
@@ -220,6 +821,8 @@
         let currentTab = 'chat';
         const conversations = { chat_quick: [], chat_consult: [], approval: [] };
         let activeRequestId = 0;
+        let currentUser = localStorage.getItem('med_agent_current_user') || '超级管理员';
+        const USER_LIST = ['超级管理员', '医生A', '医生B'];
 
         // ============================================================
         // 工具函数
@@ -268,11 +871,14 @@
                 renderMessage(msg.role, msg.content, msg.tools || null, null);
             });
             const modeSelector = document.querySelector('.mode-selector');
+            const uploadBtn = document.querySelector('.input-area button[onclick*=\"fileInput\"]');
             if (tab === 'approval') {
                 modeSelector.style.display = 'none';
+                if (uploadBtn) uploadBtn.style.display = 'none';
                 refreshApprovals();
             } else {
                 modeSelector.style.display = 'flex';
+                if (uploadBtn) uploadBtn.style.display = 'flex';
             }
         }
 
@@ -508,6 +1114,15 @@
         renderMessage('user', q, null, null);
         conv.push({ role: 'user', content: q, tools: null });
 
+        // 自动命名：如果会话名称为默认格式，使用第一个问题重命名
+        const allSessions = getSessions();
+        const curSession = allSessions.find(s => s.id === SESSION_ID);
+        if (curSession && (!curSession.name || curSession.name.startsWith('会话 '))) {
+            curSession.name = q.length > 20 ? q.substring(0, 20) + '...' : q;
+            saveSessions(allSessions);
+            renderSessionList();
+        }
+
         const thisRequestId = ++activeRequestId;
         const traceSessionId = 'trace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         const traceQuestion = q.length > 200 ? q.substring(0, 200) + '...' : q;
@@ -600,10 +1215,27 @@
         // 页面加载后初始化
         // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('currentUserName').textContent = currentUser;
             initSessions().then(() => {
                 switchTab('chat');
                 loadHistory();
             });
+        });
+        function toggleUserMenu() {
+            document.getElementById('userDropdown').classList.toggle('show');
+        }
+        async function switchUser(name) {
+            currentUser = name;
+            localStorage.setItem('med_agent_current_user', name);
+            document.getElementById('currentUserName').textContent = name;
+            document.getElementById('userDropdown').classList.remove('show');
+            try {
+                await fetch('/switch_user', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+            } catch (e) { console.error('切换用户失败:', e); }
+        }
+        document.addEventListener('click', function(e) {
+            const menu = document.getElementById('userMenu');
+            if (menu && !menu.contains(e.target)) document.getElementById('userDropdown').classList.remove('show');
         });
 
         // ============================================================
@@ -804,19 +1436,40 @@
                 else { createNewSession(); }
             } else { renderSessionList(); }
         }
+        function pinSession(sessionId) {
+            const sessions = getSessions();
+            const session = sessions.find(s => s.id === sessionId);
+            if (session) { session.pinned = !session.pinned; saveSessions(sessions); renderSessionList(); }
+        }
+        function renameSession(sessionId) {
+            const sessions = getSessions();
+            const session = sessions.find(s => s.id === sessionId);
+            if (!session) return;
+            const newName = prompt('请输入新会话名称：', session.name || '');
+            if (newName !== null) { session.name = newName.trim() || session.name; saveSessions(sessions); renderSessionList(); }
+        }
+        function filterSessions() { renderSessionList(); }
 
         function renderSessionList() {
             const container = document.getElementById('sessionList');
-            const sessions = getSessions();
+            let sessions = getSessions();
             const currentId = getCurrentSessionId();
+            const filter = (document.getElementById('sessionSearch')?.value || '').toLowerCase();
+            if (filter) sessions = sessions.filter(s => (s.name || '').toLowerCase().includes(filter));
+            sessions.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
             if (sessions.length === 0) { container.innerHTML = '<div style="color:#999;font-size:12px;padding:4px 0;">暂无会话</div>'; return; }
             let html = '';
             for (const session of sessions) {
                 const active = session.id === currentId ? 'active' : '';
                 const displayName = session.name || session.id.substring(0, 12);
+                const pinIcon = session.pinned ? '📌' : '📍';
                 html += `<div class="session-item ${active}" onclick="switchToSession('${session.id}')">
                     <span class="session-name">💬 ${displayName}</span>
-                    <span class="session-delete" onclick="event.stopPropagation(); deleteSession('${session.id}')">✕</span>
+                    <span class="session-actions">
+                        <span class="session-pin" onclick="event.stopPropagation(); pinSession('${session.id}')" title="置顶">${pinIcon}</span>
+                        <span class="session-rename" onclick="event.stopPropagation(); renameSession('${session.id}')" title="重命名">✏️</span>
+                        <span class="session-delete" onclick="event.stopPropagation(); deleteSession('${session.id}')" title="删除">✕</span>
+                    </span>
                 </div>`;
             }
             container.innerHTML = html;
@@ -851,3 +1504,14 @@
     </script>
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
