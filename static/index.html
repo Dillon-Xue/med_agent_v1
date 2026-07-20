@@ -720,9 +720,7 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
             <div class="user-dropdown" id="userDropdown">
-                <div class="user-dropdown-item" onclick="switchUser('超级管理员')">超级管理员</div>
-                <div class="user-dropdown-item" onclick="switchUser('医生A')">医生A</div>
-                <div class="user-dropdown-item" onclick="switchUser('医生B')">医生B</div>
+                <div class="user-dropdown-item" onclick="switchUser()">切换用户</div>
             </div>
         </div>
     </header>
@@ -746,7 +744,6 @@
                     <div id="sessionList"></div>
                 </div>
                 <p style="font-size:12px; color:#94a3b8; margin-top:12px; padding:0 4px;">
-                    提示：智能问诊输入「我是XXX」绑定患者
                 </p>
             </div>
             <div class="tab-content" id="tab-approval">
@@ -800,14 +797,15 @@
     </div>
 
 <script>
+        let currentUser = localStorage.getItem('med_agent_current_user') || '超级管理员';
         // ============================================================
         // 会话 ID 管理
         // ============================================================
         function getSessionId() {
-            let sessionId = localStorage.getItem('med_agent_session_id');
+            let sessionId = localStorage.getItem('med_agent_session_id_' + currentUser);
             if (!sessionId) {
                 sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
-                localStorage.setItem('med_agent_session_id', sessionId);
+                localStorage.setItem('med_agent_session_id_' + currentUser, sessionId);
             }
             return sessionId;
         }
@@ -821,8 +819,6 @@
         let currentTab = 'chat';
         const conversations = { chat_quick: [], chat_consult: [], approval: [] };
         let activeRequestId = 0;
-        let currentUser = localStorage.getItem('med_agent_current_user') || '超级管理员';
-        const USER_LIST = ['超级管理员', '医生A', '医生B'];
 
         // ============================================================
         // 工具函数
@@ -913,7 +909,7 @@
                 toolSpan.innerText = `🔧 使用工具: ${toolsUsed.join(', ')}`;
                 msgDiv.appendChild(toolSpan);
             }
-            if (role === 'assistant' && traceSessionId) {
+            if (role === 'assistant' && traceSessionId && currentTab !== 'approval') {
                 const traceBtn = document.createElement('button');
                 traceBtn.className = 'trace-btn';
                 traceBtn.textContent = '🔍 查看推理过程';
@@ -1218,20 +1214,31 @@
             document.getElementById('currentUserName').textContent = currentUser;
             initSessions().then(() => {
                 switchTab('chat');
-                loadHistory();
             });
         });
         function toggleUserMenu() {
             document.getElementById('userDropdown').classList.toggle('show');
         }
-        async function switchUser(name) {
-            currentUser = name;
-            localStorage.setItem('med_agent_current_user', name);
-            document.getElementById('currentUserName').textContent = name;
+        async function switchUser() {
+            const name = prompt('请输入医生姓名：', currentUser);
+            if (!name || !name.trim()) return;
+            currentUser = name.trim();
+            localStorage.setItem('med_agent_current_user', currentUser);
+            document.getElementById('currentUserName').textContent = currentUser;
             document.getElementById('userDropdown').classList.remove('show');
             try {
-                await fetch('/switch_user', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+                await fetch('/switch_user', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: currentUser }) });
             } catch (e) { console.error('切换用户失败:', e); }
+            // 重新生成当前用户的 SESSION_ID，清空内存和DOM
+            SESSION_ID = getSessionId();
+            conversations.chat_quick = [];
+            conversations.chat_consult = [];
+            conversations.approval = [];
+            document.getElementById('chat').innerHTML = '';
+            activeRequestId++;
+            initSessions().then(() => {
+                switchTab('chat');
+            });
         }
         document.addEventListener('click', function(e) {
             const menu = document.getElementById('userMenu');
@@ -1246,6 +1253,8 @@
                 const resp = await fetch(`/history?session_id=${SESSION_ID}&limit=50`);
                 const data = await resp.json();
                 if (data.success && data.items.length > 0) {
+                    const targetKey = getCurrentConversationKey();
+                    conversations[targetKey] = [];
                     data.items.forEach(item => {
                         const key = item.conversation_type === 'quick' ? 'chat_quick' :
                             item.conversation_type === 'consult' ? 'chat_consult' : 'approval';
@@ -1372,13 +1381,13 @@
         // ============================================================
         // 会话管理（多会话支持）
         // ============================================================
-        const SESSIONS_KEY = 'med_agent_sessions';
-        const CURRENT_SESSION_KEY = 'med_agent_current_session';
+        function getSessionsKey() { return 'med_agent_sessions_' + currentUser; }
+        function getCurrentSessionKey() { return 'med_agent_current_session_' + currentUser; }
 
-        function getSessions() { try { const data = localStorage.getItem(SESSIONS_KEY); return data ? JSON.parse(data) : []; } catch { return []; } }
-        function saveSessions(sessions) { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions)); }
-        function getCurrentSessionId() { return localStorage.getItem(CURRENT_SESSION_KEY) || null; }
-        function setCurrentSessionId(sessionId) { localStorage.setItem(CURRENT_SESSION_KEY, sessionId); }
+        function getSessions() { try { const data = localStorage.getItem(getSessionsKey()); return data ? JSON.parse(data) : []; } catch { return []; } }
+        function saveSessions(sessions) { localStorage.setItem(getSessionsKey(), JSON.stringify(sessions)); }
+        function getCurrentSessionId() { return localStorage.getItem(getCurrentSessionKey()) || null; }
+        function setCurrentSessionId(sessionId) { localStorage.setItem(getCurrentSessionKey(), sessionId); }
         function generateSessionName(sessions) { return `会话 ${sessions.length + 1}`; }
 
         function createNewSession() {
