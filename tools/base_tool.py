@@ -6,6 +6,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from tools.retriever import HybridRetriever
 from typing import List, Optional
 from utils.config import get_llm_provider, get_ollama_base_url, get_ollama_model, get_llm_client
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.getenv("MED_AGENT_ROOT", os.getcwd())
@@ -67,7 +68,9 @@ class BaseTool(ABC):
             chunk_index = doc.metadata.get("chunk_index", 1)
             content = doc.page_content.strip()
             if content:
-                cite_info = f"(来源: {source}, 第 {page} 页，第 {chunk_index} 段)"
+                figure_ids = doc.metadata.get("figure_ids", "")
+                fig_part = f", {figure_ids}" if figure_ids else ""
+                cite_info = f"(来源: {source}, 第 {page} 页{fig_part}, 第 {chunk_index} 段)"
                 context_parts.append(f"{content} {cite_info}")
                 citations.append({
                     "index": i,

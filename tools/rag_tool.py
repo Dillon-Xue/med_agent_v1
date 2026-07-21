@@ -4,6 +4,7 @@ from langchain_chroma import Chroma
 from utils.response import build_response
 from utils.embeddings import DashscopeEmbeddings
 from utils.config import get_llm_client
+
 logger = logging.getLogger(__name__)
 
 class RAGTool:
@@ -41,7 +42,9 @@ class RAGTool:
             source = meta.get("source", "未知来源")
             page = meta.get("page", "?")
             chunk_idx = meta.get("chunk_index", "?")
-            parts.append(f"[{i}] {d.page_content}\n(来源: {source}, 第 {page} 页，第 {chunk_idx} 段)")
+            figure_ids = meta.get("figure_ids", "")
+            fig_part = f", {figure_ids}" if figure_ids else ""
+            parts.append(f"[{i}] {d.page_content}\n(来源: {source}, 第 {page} 页{fig_part}, 第 {chunk_idx} 段)")
         return "\n\n".join(parts)
 
     def rewrite(self, q: str) -> str:
@@ -63,7 +66,7 @@ class RAGTool:
     def retrieve(self, query: str):
         t0 = time.time()
         try:
-            docs = self.vectordb.similarity_search(query, k=10)
+            docs = self.vectordb.similarity_search(query, k=20)
         except Exception as e:
             docs = []
             self.trace("retrieve_error", {"error": str(e)})
@@ -72,7 +75,7 @@ class RAGTool:
 
     def rerank(self, docs):
         t0 = time.time()
-        top_docs = docs[:5]
+        top_docs = docs[:10]
         self.trace("rerank", {"input": len(docs), "output": len(top_docs), "latency": round(time.time() - t0, 3)})
         return top_docs
 
@@ -97,7 +100,7 @@ class RAGTool:
         system_prompt = """你是一位严格基于资料的医学助手。
 【核心规则】
 1. 必须只使用提供的资料回答问题，禁止输出资料外的任何推理、猜测或补充。
-2. 每条事实后必须标注精确来源，格式：(来源: xxx.pdf, 第 N 页，第 M 段)。
+2. 每条事实后必须标注精确来源，格式：(来源: xxx.pdf, 第 N 页，第 M 段)。如果资料中涉及图表信息，格式为：(来源: xxx.pdf, 第 N 页, 图X, 第 M 段) 或 (来源: xxx.pdf, 第 N 页, 表X, 第 M 段)。
 3. 如果资料中没有直接答案，回答"根据现有资料，未找到相关信息。"，禁止编造。
 4. 禁止输出"总结建议"、"【来源：XX工具】"等标签。
 5. 只回答与问题直接相关的内容。"""

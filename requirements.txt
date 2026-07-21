@@ -40,3 +40,4 @@ prometheus-client==0.20.0
 
 # ===== 飞书集成 =====
 lark-channel-sdk>=1.0.0
+pymupdf>=1.23.0
