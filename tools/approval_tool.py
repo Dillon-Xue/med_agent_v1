@@ -38,6 +38,9 @@ class ApprovalTool:
         return "default"
 
     def _get_current_user(self, query: str = "") -> str:
+        did = doctor_id_var.get()
+        if did:
+            return did
         try:
             import chat
             if hasattr(chat, 'current_session_user') and chat.current_session_user:
@@ -294,31 +297,8 @@ class ApprovalTool:
             (approval_id, user)
         )
         affected = cursor.rowcount
-        conn.commit()
 
-        # ===== 🆕 数据回流：审批通过后写入记忆库 =====
-        if affected:
-            try:
-                # 查询完整审批内容
-                cursor.execute(
-                    "SELECT content, type, requester FROM approvals WHERE id = %s",
-                    (approval_id,)
-                )
-                approval_row = cursor.fetchone()
-                if approval_row:
-                    content = approval_row.get('content')
-                    approval_type = approval_row.get('type')
-                    requester = approval_row.get('requester')
-
-                    # 仅对用药评估类型触发数据回流
-                    if approval_type == "medication_evaluation":
-                        self._write_to_memory(approval_id, content, requester, doctor_id)
-            except Exception as e:
-                logger.error(f"[数据回流] 写入记忆库失败: {e}")
-                # 不影响审批主流程
-
-        conn.close()
-
+        # 审计日志在主事务提交前记录
         try:
             from utils.audit import log_audit
             log_audit(
@@ -330,6 +310,28 @@ class ApprovalTool:
             )
         except Exception as e:
             logger.error(f"[Audit] 审批日志记录失败: {e}")
+
+        conn.commit()
+
+        # ===== 🆕 数据回流：审批通过后写入记忆库 =====
+        if affected:
+            try:
+                cursor.execute(
+                    "SELECT content, type, requester FROM approvals WHERE id = %s",
+                    (approval_id,)
+                )
+                approval_row = cursor.fetchone()
+                if approval_row:
+                    content = approval_row.get('content')
+                    approval_type = approval_row.get('type')
+                    requester = approval_row.get('requester')
+                    if approval_type == "medication_evaluation":
+                        self._write_to_memory(approval_id, content, requester, doctor_id)
+            except Exception as e:
+                logger.error(f"[数据回流] 写入记忆库失败: {e}")
+
+        conn.commit()
+        conn.close()
 
         logger.info(f"[DEBUG] approve - affected rows: {affected}")
 
@@ -440,7 +442,8 @@ class ApprovalTool:
             (comment, approval_id, user)
         )
         affected = cursor.rowcount
-        conn.commit()
+
+        # 审计日志在主事务提交前记录
         try:
             from utils.audit import log_audit
             log_audit(
@@ -452,6 +455,8 @@ class ApprovalTool:
             )
         except Exception as e:
             logger.error(f"[Audit] 审批日志记录失败: {e}")
+
+        conn.commit()
         conn.close()
         logger.debug(f"[DEBUG] reject - affected rows: {affected}")
 

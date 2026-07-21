@@ -147,6 +147,15 @@ app = FastAPI(
     openapi_tags=tags_metadata
 )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    import traceback
+    logger.error(f"[GlobalException] {request.method} {request.url.path}: {exc}\n{traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "error": "服务器内部错误，请稍后重试"}
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(","),
@@ -348,7 +357,7 @@ async def process_question(question: str, history: list, trace_callback=None) ->
     memory_context = ""
     try:
         from tools.memory_tool import MemoryTool
-        doctor_id = current_session_user if current_session_user else None
+        doctor_id = doctor_id_var.get() or None
         memory_tool = MemoryTool()
         results = memory_tool.recall(question, k=2, doctor_id=doctor_id, min_similarity=0.3)
         if results:
@@ -474,9 +483,9 @@ async def ask(req: ChatRequest, request: Request):
     if re.match(r'^用户[：:]', question):
         user_match = re.search(r'用户[：:]\s*(\S+)', question)
         if user_match:
-            current_session_user = user_match.group(1)
-            doctor_id_var.set(current_session_user)
-            logger.info(f"[身份声明] 当前用户设置为: {current_session_user}")
+            current_user = user_match.group(1)
+            doctor_id_var.set(current_user)
+            logger.info(f"[身份声明] 当前用户设置为: {current_user}")
             return {
                 "success": True,
                 "result": {
@@ -767,9 +776,9 @@ async def consult(req: ChatRequest, request: Request):
     if re.match(r'^用户[：:]', question):
         user_match = re.search(r'用户[：:]\s*(\S+)', question)
         if user_match:
-            current_session_user = user_match.group(1)
-            doctor_id_var.set(current_session_user)
-            logger.info(f"[Consult] 身份声明，当前用户设置为: {current_session_user}")
+            current_user = user_match.group(1)
+            doctor_id_var.set(current_user)
+            logger.info(f"[Consult] 身份声明，当前用户设置为: {current_user}")
             return {
                 "success": True,
                 "result": {
@@ -996,10 +1005,8 @@ async def consult(req: ChatRequest, request: Request):
 )
 async def get_approvals():
     from tools.tool_registry import get_tools
-    from chat import current_session_user
-
-    logger.debug(f"[DEBUG] /approvals - current_session_user: {current_session_user}")
-    user = current_session_user if current_session_user else "current_user"
+    user = doctor_id_var.get() or "current_user"
+    logger.debug(f"[DEBUG] /approvals - user from ContextVar: {user}")
     logger.debug(f"[DEBUG] /approvals - 查询用户: {user}")
 
     tools = get_tools()
@@ -1131,6 +1138,18 @@ async def upload_file(
             preview="",
             source="file",
             error="文件大小超过 10MB 限制"
+        )
+
+    # 2. 文件类型校验
+    allowed_types = {"image/png", "image/jpeg", "image/jpg", "application/pdf"}
+    if file.content_type not in allowed_types:
+        return UploadResponse(
+            success=False,
+            filename=file.filename,
+            content="",
+            preview="",
+            source="file",
+            error=f"不支持的文件类型: {file.content_type}，仅支持 PNG/JPG/PDF"
         )
     
     # 2. 调用 FileTool 解析
@@ -1311,7 +1330,7 @@ async def get_approval_detail(approval_id: str, request: Request):
     from chat import get_current_tenant
 
     tenant_id = get_current_tenant()
-    user = current_session_user if current_session_user else None
+    user = doctor_id_var.get() or None
 
     if not user:
         return ApprovalDetailResponse(

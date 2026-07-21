@@ -17,6 +17,13 @@ def get_tenant():
 def get_current_user():
     """获取当前用户"""
     try:
+        from utils.thread_context import doctor_id_var
+        user = doctor_id_var.get()
+        if user:
+            return user
+    except Exception:
+        pass
+    try:
         import chat
         if hasattr(chat, 'current_session_user') and chat.current_session_user:
             return chat.current_session_user

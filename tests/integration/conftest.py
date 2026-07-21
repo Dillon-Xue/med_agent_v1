@@ -108,7 +108,7 @@ def test_doctor():
 
 @pytest.fixture
 def test_patient_data():
-    unique_suffix = str(uuid.uuid4())[:6]
+    unique_suffix = str(uuid.uuid4().int)[:6]
     return {
         "name": f"测试患者_{unique_suffix}",
         "gender": "男",
@@ -153,21 +153,22 @@ def setup_test_context(test_tenant, test_doctor):
     os.environ["DB_PORT"] = "3306"
     os.environ["DB_NAME"] = "patient_db"
 
-    import chat
-    original_user = getattr(chat, 'current_session_user', None)
-    chat.current_session_user = test_doctor
-
-    def mock_get_tenant():
-        return test_tenant
-    original_get_tenant = getattr(chat, 'get_current_tenant', None)
-    chat.get_current_tenant = mock_get_tenant
+    from utils.thread_context import doctor_id_var, tenant_id_var
+    original_user = doctor_id_var.get()
+    doctor_id_var.set(test_doctor)
+    original_tenant = tenant_id_var.get()
+    tenant_id_var.set(test_tenant)
 
     yield
 
-    if original_user is not None:
-        chat.current_session_user = original_user
-    if original_get_tenant is not None:
-        chat.get_current_tenant = original_get_tenant
+    if original_user:
+        doctor_id_var.set(original_user)
+    else:
+        doctor_id_var.set("")
+    if original_tenant:
+        tenant_id_var.set(original_tenant)
+    else:
+        tenant_id_var.set("")
 
 
 @pytest.fixture

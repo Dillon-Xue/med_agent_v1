@@ -72,6 +72,26 @@ def get_llm_client(api_key: str = None, timeout: float = 120.0):
 def get_log_level() -> str:
     return os.getenv("LOG_LEVEL", "INFO").upper()
 
+# ===== 向量检索与文档处理配置 =====
+def get_chunk_size() -> int:
+    return int(os.getenv("CHUNK_SIZE", "500"))
+
+def get_chunk_overlap() -> int:
+    return int(os.getenv("CHUNK_OVERLAP", "100"))
+
+def get_max_iterations() -> int:
+    return int(os.getenv("MAX_ITERATIONS", "3"))
+
+def get_min_text_length() -> int:
+    return int(os.getenv("MIN_TEXT_LENGTH", "50"))
+
+def get_max_upload_size() -> int:
+    return int(os.getenv("MAX_UPLOAD_SIZE", str(20 * 1024 * 1024)))
+
+def get_allowed_upload_types() -> set:
+    types = os.getenv("ALLOWED_UPLOAD_TYPES", "image/png,image/jpeg,image/jpg,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return set(t.strip() for t in types.split(","))
+
 def setup_logging():
     """配置全局日志格式（chat.py 会调用，其他模块无需重复配置）"""
     level = get_log_level()

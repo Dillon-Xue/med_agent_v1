@@ -93,7 +93,11 @@ class HybridRetriever:
                     score_val = float(score)
                 except (TypeError, ValueError):
                     score_val = float(score[0]) if len(score) > 0 else 0.0
-                doc_id = doc.page_content[:100] + str(doc.metadata)
+                # 使用Chroma返回的文档ID进行去重（如果可用），否则使用内容+元数据哈希
+                doc_id = getattr(doc, "id", None)
+                if not doc_id:
+                    import hashlib
+                    doc_id = hashlib.md5((doc.page_content[:200] + str(sorted(doc.metadata.items()))).encode()).hexdigest()
                 if doc_id not in all_docs or score_val < all_docs[doc_id][1]:
                     all_docs[doc_id] = (doc, score_val)
 
@@ -106,7 +110,11 @@ class HybridRetriever:
                     score_val = float(score)
                 except (TypeError, ValueError):
                     score_val = float(score[0]) if len(score) > 0 else 0.0
-                doc_id = doc.page_content[:100] + str(doc.metadata)
+                # 使用Chroma返回的文档ID进行去重（如果可用），否则使用内容+元数据哈希
+                doc_id = getattr(doc, "id", None)
+                if not doc_id:
+                    import hashlib
+                    doc_id = hashlib.md5((doc.page_content[:200] + str(sorted(doc.metadata.items()))).encode()).hexdigest()
                 if doc_id not in all_docs:
                     all_docs[doc_id] = (doc, score_val)
 

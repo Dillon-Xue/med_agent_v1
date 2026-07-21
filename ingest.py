@@ -27,10 +27,12 @@ embeddings = DashscopeEmbeddings()
 
 CATEGORIES = ["rag", "literature", "drug", "guideline", "risk"]
 
-splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+from utils.config import get_chunk_size, get_chunk_overlap, get_min_text_length
+
+splitter = RecursiveCharacterTextSplitter(chunk_size=get_chunk_size(), chunk_overlap=get_chunk_overlap())
 
 # Minimum text length threshold to consider a page as image-based
-MIN_TEXT_LENGTH = 50
+MIN_TEXT_LENGTH = get_min_text_length()
 
 STATE_FILE = ".index_state.json"
 
@@ -89,9 +91,14 @@ def analyze_page_image(pixmap_bytes, page_num, source_file):
 def extract_figure_ids(text):
     """Extract figure/table IDs like 图1, 表2, Figure 3, Table 1 from text."""
     ids = set()
+    false_suffixes = set('周年月日时分秒个种例次人条页章节')
     for p in FIGURE_PATTERNS:
         for m in re.finditer(p, text, re.IGNORECASE):
-            ids.add(m.group(0))
+            full_match = m.group(0)
+            end_pos = m.end()
+            if end_pos < len(text) and text[end_pos] in false_suffixes:
+                continue
+            ids.add(full_match)
     # Stable sort: Chinese first, then by number
     def sort_key(x):
         num = re.search(r'\d+(?:[\.-]\d+)?', x)

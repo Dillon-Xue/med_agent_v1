@@ -102,7 +102,10 @@ class FileTool:
                 tmp_path = tmp.name
             
             doc = Document(tmp_path)
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
             
             text_parts = []
             
@@ -157,7 +160,10 @@ class FileTool:
                 tmp_path = tmp.name
             
             wb = load_workbook(tmp_path, data_only=True)
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
             
             text_parts = []
             for sheet in wb.worksheets:

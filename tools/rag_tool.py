@@ -91,7 +91,13 @@ class RAGTool:
         elif query.startswith("患者信息：") and "。问题：" in query:
             tool_question = query.split("。问题：", 1)[-1].strip()
 
-        rq = self.rewrite(tool_question)
+        # 如果查询包含明确的页码/图表编号/位置限定词，跳过改写直接检索
+        location_keywords = re.findall(r'第\s*\d+\s*[页页]|图\s*\d+|表\s*\d+|第\s*[一二三四五]\s*章|page\s+\d+|figure\s+\d+|table\s+\d+', tool_question, re.IGNORECASE)
+        if location_keywords:
+            rq = tool_question
+            self.trace("rewrite", {"input": tool_question, "output": rq, "reason": "location_keywords_detected", "keywords": location_keywords})
+        else:
+            rq = self.rewrite(tool_question)
         docs = self.retrieve(rq)
         final_docs = self.rerank(docs)
         context = self._build_cited_context(final_docs)

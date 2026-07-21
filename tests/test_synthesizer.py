@@ -52,8 +52,8 @@ class TestMultiTool:
         syn.client.chat.completions.create.return_value = mock_response
 
         tool_results = [
-            {"source": "drug", "answer": "药品信息"},
-            {"source": "guideline", "answer": "指南信息"},
+            {"source": "drug", "answer": "药品信息 (来源: 药品说明书.pdf, 第 2 页，第 1 段)"},
+            {"source": "guideline", "answer": "指南信息 (来源: 临床指南.pdf, 第 5 页，第 2 段)"},
         ]
         result = syn.run("问题", tool_results)
         # 注意返回会包含科室标签，因此检查是否包含目标答案
@@ -77,7 +77,7 @@ class TestSpecialtyPrompt:
         mock_response.choices[0].message.content = "心外科回答"
         syn.client.chat.completions.create.return_value = mock_response
 
-        result = syn.run("问题", [{"source": "drug", "answer": "信息"}])
+        result = syn.run("问题", [{"source": "drug", "answer": "信息 (来源: 药品说明书.pdf, 第 1 页，第 1 段)"}])
         call_args = syn.client.chat.completions.create.call_args[1]
         system_msg = next(msg for msg in call_args["messages"] if msg["role"] == "system")
         assert "心外科专家" in system_msg["content"]
@@ -90,7 +90,7 @@ class TestSpecialtyPrompt:
         mock_response.choices[0].message.content = "药剂科回答"
         syn.client.chat.completions.create.return_value = mock_response
 
-        result = syn.run("问题", [{"source": "drug", "answer": "信息"}])
+        result = syn.run("问题", [{"source": "drug", "answer": "信息 (来源: 药品说明书.pdf, 第 1 页，第 1 段)"}])
         call_args = syn.client.chat.completions.create.call_args[1]
         system_msg = next(msg for msg in call_args["messages"] if msg["role"] == "system")
         assert "药剂科专家" in system_msg["content"]

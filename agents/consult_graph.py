@@ -1,3 +1,4 @@
+import os
 import os, re, json, asyncio, concurrent.futures, traceback, logging
 from langgraph.graph import StateGraph, END
 from agents.state import AgentState
@@ -312,7 +313,7 @@ class ConsultGraph:
         state["patient_info"] = patient_info
         state["missing_info"] = missing
         #state["iteration"] = state.get("iteration", 0) + 1
-        state["max_iterations"] = state.get("max_iterations", 5)
+        state["max_iterations"] = state.get("max_iterations", int(os.getenv("MAX_ITERATIONS", "5")))
 
         self._log("最终 patient_info:", patient_info)
         self._log("最终 missing_info:", missing)
@@ -320,7 +321,7 @@ class ConsultGraph:
         return state
 
     def _should_ask_or_execute(self, state: AgentState) -> str:
-        if state["missing_info"] and state["iteration"] <= state.get("max_iterations", 5):
+        if state["missing_info"] and state["iteration"] <= state.get("max_iterations", int(os.getenv("MAX_ITERATIONS", "5"))):
             return "ask"
         return "execute"
 
@@ -383,7 +384,8 @@ class ConsultGraph:
         #  L4 语义记忆检索（注入历史参考）
         memory_context = ""
         try:
-            doctor_id = getattr(chat_module, 'current_session_user', 'default')
+            from utils.thread_context import doctor_id_var
+            doctor_id = doctor_id_var.get() or 'default' 
             memory_tool = MemoryTool()
             results = memory_tool.recall(original_question, k=2, doctor_id=doctor_id, min_similarity=0.3)
             if results:
@@ -682,7 +684,7 @@ class ConsultGraph:
             "tool_results": [],
             "final_answer": "",
             "iteration": 0,
-            "max_iterations": 3
+            "max_iterations": int(os.getenv("MAX_ITERATIONS", "3"))
         }
         self._log("初始状态:", initial_state)
         self._log("========== run 结束 ==========")
@@ -703,7 +705,7 @@ class ConsultGraph:
         question = state.get("question", "")
         tool_results = state.get("tool_results", [])
         iteration = state.get("iteration", 0) + 1
-        max_iterations = state.get("max_iterations", 3)
+        max_iterations = state.get("max_iterations", int(os.getenv("MAX_ITERATIONS", "3")))
 
         # 打印进入时的迭代值，帮助排查
         logger.info(f"[Reflect] 进入时 iteration = {state.get('iteration', '未设置')}，本轮自增后为 {iteration}")
@@ -855,7 +857,7 @@ class ConsultGraph:
 
     def _should_continue_or_output(self, state: AgentState) -> str:
         iteration = state.get("iteration", 0)
-        max_iterations = state.get("max_iterations", 3)
+        max_iterations = state.get("max_iterations", int(os.getenv("MAX_ITERATIONS", "3")))
         
         # 安全获取最新一条反思记录
         history = state.get("reflection_history", [])
