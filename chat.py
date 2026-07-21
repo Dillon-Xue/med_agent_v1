@@ -1371,6 +1371,31 @@ async def get_approval_detail(approval_id: str, request: Request):
             error=str(e)
         )
 
+
+@app.post("/approval/{approval_id}/approve")
+async def api_approve_approval(approval_id: str):
+    """审批通过"""
+    try:
+        from tools.approval_tool import ApprovalTool
+        approval_tool = ApprovalTool()
+        result = approval_tool.approve(approval_id)
+        return {"success": True, "result": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/approval/{approval_id}/reject")
+async def api_reject_approval(approval_id: str, request: Request):
+    """审批驳回"""
+    try:
+        from tools.approval_tool import ApprovalTool
+        approval_tool = ApprovalTool()
+        body = await request.json()
+        comment = body.get("comment", "")
+        result = approval_tool.reject(approval_id, comment)
+        return {"success": True, "result": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.get(
     "/preview/{filename}",
     tags=["报告"],
